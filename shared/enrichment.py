@@ -11,15 +11,25 @@ _ENRICH_COLS = [
 ]
 
 
+def materialize(df: DataFrame) -> DataFrame:
+    """Collapse a small static DataFrame into a single LocalRelation with no join/window
+    lineage. Required before it becomes the broadcast side of an RTM stream-static join:
+    RTM rejects the batch-batch joins that BUILD the fleet if they remain in the streaming
+    query plan (STREAMING_REAL_TIME_MODE.BATCH_BATCH_JOIN_NOT_SUPPORTED). The fleet is tiny,
+    so collect + recreate is cheap and runs once at job start."""
+    return df.sparkSession.createDataFrame(df.collect(), df.schema)
+
+
 def load_fleet(spark: SparkSession, static_path: str) -> DataFrame:
     """Join freezer_metadata + device_thresholds + site_metadata into one table.
-    Also the pool the producer draws freezers from."""
+    Also the pool the producer draws freezers from. Returned materialized (see above)."""
     fm = spark.read.option("header", True).csv(f"{static_path}/freezer_metadata.csv")
     dt = (spark.read.option("header", True).csv(f"{static_path}/device_thresholds.csv")
           .withColumn("temperature_upper_limit", F.col("temperature_upper_limit").cast("double"))
           .withColumn("door_open_limit_seconds", F.col("door_open_limit_seconds").cast("int")))
     sm = spark.read.option("header", True).csv(f"{static_path}/site_metadata.csv")
-    return fm.join(dt, "freezer_type", "left").join(sm, "site_id", "left")
+    joined = fm.join(dt, "freezer_type", "left").join(sm, "site_id", "left")
+    return materialize(joined)
 
 
 def enrich(events: DataFrame, fleet: DataFrame) -> DataFrame:

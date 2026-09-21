@@ -9,7 +9,7 @@ import argparse
 from pyspark.sql import SparkSession, Window
 from pyspark.sql import functions as F
 
-from shared.enrichment import load_fleet
+from shared.enrichment import load_fleet, materialize
 from shared.scenarios import build_events
 from shared.kafka_io import kafka_options
 
@@ -37,6 +37,7 @@ def main():
     fleet = load_fleet(spark, args.static_path).withColumn(
         "idx", (F.row_number().over(Window.orderBy("freezer_id")) - 1)
     )
+    fleet = materialize(fleet)   # collapse the window too — the RTM broadcast side must be a plain relation
     n = fleet.count()
 
     rate = (spark.readStream.format("rate")
