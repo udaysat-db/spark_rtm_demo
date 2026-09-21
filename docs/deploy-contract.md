@@ -121,12 +121,41 @@ the jobs, schema, volumes, and secret scope. Its env lives in `app/app.yaml`.
 The store roster ships in the app (`app/fleet_roster.csv`) so the grid renders every store at
 rest. There is **no `PGHOST/PGUSER/...`** — that was the removed Lakebase path.
 
+## 6. Feeding a session (assistant / automation)
+
+When a coding assistant or CI job runs the deploy, the handoff must keep **raw secrets out
+of the chat/transcript and out of the repo**. The rule: land each credential where the CLI
+already reads it, and pass only *names* to the session.
+
+| Need | Infra lands it at | The session uses |
+|---|---|---|
+| **Auth** | a service-principal OAuth profile in `~/.databrickscfg` (`host` + `client_id` + `client_secret`), or `DATABRICKS_HOST` / `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET` exported in the shell | `--profile <name>` — the secret stays in `~/.databrickscfg`, never pasted |
+| **Non-secret config** | a filled `config.yaml` at the repo root (gitignored; from `config.template.yaml`) | `./scripts/deploy.sh` reads it |
+| **Kafka SASL creds** | infra **populates the secret scope itself** (`databricks secrets put-secret <scope> sasl_jaas_config` [+ `sasl_mechanism`]) with its own access | referenced by scope **name** only — the session never handles the raw JAAS/password |
+
+Then the session runs:
+
+```bash
+./scripts/deploy.sh                                   # bundle deploy (+ upload CSVs)
+./scripts/run.sh producer rtm_consumer microbatch_consumer
+```
+
+**What to hand the session:** the **profile name**, confirmation that **`config.yaml` is in
+place**, and that the **secret scope is populated and the topics exist**. Nothing secret needs
+to appear in the conversation.
+
+Notes:
+- Prefer a **fresh SP profile** with deploy grants (§1) — interactive-login tokens expire.
+- For interactive OAuth instead of an SP, a human runs `databricks auth login --host <url>
+  --profile <name>` themselves (in Claude Code, prefix with `!` so it runs in-session), then
+  tells the session to use that profile. Assistants must **never auto-select a profile**.
+
 ## Handoff checklist (what the infra repo provides)
 
 - [ ] `.databrickscfg` profile stanza (or the equivalent env vars) — §1
 - [ ] filled `config.yaml` (no secrets) — §2
 - [ ] secret scope `signalnow_kafka` populated with `sasl_jaas_config` (+ `sasl_mechanism` for SCRAM) — §3
-- [ ] network reachable + `input_topic`/`output_topic` created with the right partitions — §4
+- [ ] network reachable + `input_topic`/`output_topic`/`metrics_topic` created with the right partitions — §4
 - [ ] (if app is live) app SP granted `READ` on the scope — §5
 
 ## Open item
