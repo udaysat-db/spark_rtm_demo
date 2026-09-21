@@ -106,7 +106,16 @@ When `sasl_jaas_config` is present the code uses **SASL_SSL** with the mechanism
 Confluent Cloud SCRAM) is supported by setting `sasl_mechanism` + a shaded SCRAM
 `sasl_jaas_config`. mTLS / cloud-IAM (MSK IAM) still need `kafka_options()` extending.
 
-The **deploy principal and the job-cluster run principal both need `READ`** on this scope.
+**Scope permissions:**
+- The **job-cluster run identity** needs **`READ`** — the streaming jobs read `sasl_jaas_config`
+  at runtime. `SINGLE_USER` clusters run as the deploying principal unless a `run_as` is set.
+- The **SignalNow deployer** needs **`MANAGE`** (for the live app): the app-resource binding
+  grants the app's SP `READ` *during deploy*, and adding that ACL is a MANAGE-level action.
+  `MANAGE` also implies read — so a deployer who can wire the app can read the Kafka creds
+  (unavoidable in this model, and the run identity needs READ anyway).
+- Simplest path: **the bundle creates the scope**, so the deployer owns it (MANAGE)
+  automatically. If the **feeder** pre-creates the scope, it must grant the deployer MANAGE.
+  The deployer is **not** required to be a workspace admin (see §1 grants).
 
 ## 4. Preconditions the infra repo owns
 
