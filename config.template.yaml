@@ -1,0 +1,37 @@
+# SignalNow RTM — user configuration. Copy to config.yaml (gitignored) and fill in.
+#
+# This repo contains NO infrastructure-provisioning code: Kafka and the Databricks
+# workspace are bring-your-own. Kafka credentials are NOT stored here — they go into
+# a Databricks secret scope out of band (see docs/deploy-contract.md).
+#
+# The keys here map 1:1 onto the bundle variables in databricks.yml. For the full
+# credential contract (auth, grants, secret-scope keys, network, topics), see
+# docs/deploy-contract.md.
+
+# --- Databricks workspace (bring your own) ---
+profile: <your-databricks-cli-profile>     # from `databricks auth profiles`
+catalog: <your-unity-catalog>              # deploy principal has CREATE SCHEMA/VOLUME here
+schema: signalnow_rtm                       # created by the bundle
+
+# --- Compute (RTM: Classic, fixed-size, Photon OFF, spot OFF) ---
+spark_version: 18.1.x-scala2.13            # DBR 18.1+ (Kafka-only path; no Lakebase)
+node_type_id: <cloud-node-type>            # e.g. i3.2xlarge (AWS) / Standard_E8ds_v5 (Azure)
+rtm_workers: 2                              # fixed worker count; worker vCPUs >= sum of partitions across stages
+
+# --- Kafka (bring your own; reachable from the workspace) ---
+kafka_bootstrap_servers: <host:9092,host:9092>
+input_topic: freezer_sensor_events
+output_topic: freezer_alerts_enriched
+metrics_topic: freezer_pipeline_metrics     # consumers' StreamingQueryListener write here; the app reads it once backend_kafka lands
+kafka_topic_partitions: 4                   # must equal the real topic partition count (drives RTM slot math)
+# Credentials are read at runtime from the secret scope below (never committed):
+kafka_secret_scope: signalnow_kafka
+#   databricks secrets create-scope signalnow_kafka
+#   databricks secrets put-secret  signalnow_kafka sasl_jaas_config   # if the broker uses SASL
+
+# --- Producer defaults ---
+events_per_second: 200
+scenario: normal                            # normal|door_open|compressor_failure|power_outage|fleet_hot_zone
+
+# --- Micro-batch consumer ---
+processing_time_interval: "5 seconds"

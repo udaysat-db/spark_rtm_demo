@@ -1,0 +1,21 @@
+resources:
+  schemas:
+    signalnow:
+      catalog_name: ${var.catalog}
+      name: ${var.schema}
+      comment: SignalNow RTM demo — alerts, checkpoints, static enrichment.
+
+  volumes:
+    static:
+      catalog_name: ${var.catalog}
+      schema_name: ${var.schema}
+      name: static
+      volume_type: MANAGED
+      comment: Enrichment CSVs (freezer/site metadata, thresholds).
+
+    checkpoints:
+      catalog_name: ${var.catalog}
+      schema_name: ${var.schema}
+      name: checkpoints
+      volume_type: MANAGED
+      comment: Per-stream Structured Streaming checkpoints.

@@ -1,0 +1,39 @@
+resources:
+  jobs:
+    microbatch_consumer:
+      name: "[${bundle.target}] SignalNow — micro-batch consumer"
+      tasks:
+        - task_key: consume
+          spark_python_task:
+            python_file: ../src/microbatch_consumer/main.py
+            parameters:
+              - "--kafka-bootstrap"
+              - "${var.kafka_bootstrap_servers}"
+              - "--secret-scope"
+              - "${var.kafka_secret_scope}"
+              - "--input-topic"
+              - "${var.input_topic}"
+              - "--output-topic"
+              - "${var.output_topic}"
+              - "--static-path"
+              - "/Volumes/${var.catalog}/${var.schema}/static"
+              - "--checkpoint"
+              - "/Volumes/${var.catalog}/${var.schema}/checkpoints/microbatch_consumer"
+              - "--source-mode"
+              - "microbatch"
+              - "--trigger-interval"
+              - "${var.processing_time_interval}"
+              - "--metrics-topic"
+              - "${var.metrics_topic}"
+          job_cluster_key: microbatch
+          libraries:
+            - whl: ../dist/*.whl
+
+      # Plain micro-batch cluster — the deliberate contrast to the RTM one.
+      job_clusters:
+        - job_cluster_key: microbatch
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: ${var.rtm_workers}
+            data_security_mode: SINGLE_USER

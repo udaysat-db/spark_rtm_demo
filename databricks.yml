@@ -1,0 +1,63 @@
+bundle:
+  name: signalnow_rtm
+
+include:
+  - resources/*.yml
+
+# Build the shared package into a wheel; jobs install it and import `shared`.
+artifacts:
+  signalnow_wheel:
+    type: whl
+    build: python -m build --wheel
+    path: .
+
+variables:
+  # Workspace — set at deploy time (kept out of the repo). See config.template.yaml.
+  profile:
+    description: Databricks CLI profile to deploy with.
+    default: DEFAULT
+  catalog:
+    description: Unity Catalog for the schema and volumes (Kafka is the only sink; no Lakebase).
+    default: main
+  schema:
+    default: signalnow_rtm
+
+  # Compute — DBR 18.1+ for RTM (Classic, fixed-size, Photon OFF, spot OFF).
+  spark_version:
+    default: 18.1.x-scala2.13
+  node_type_id:
+    description: Cloud-specific worker type (e.g. i3.2xlarge / Standard_E8ds_v5).
+    default: i3.2xlarge
+  rtm_workers:
+    description: Fixed worker count. RTM slot math — worker vCPUs must be >= sum of partitions across stages.
+    default: 2
+
+  # Kafka — bring your own; credentials live in the secret scope, not here.
+  kafka_bootstrap_servers:
+    default: localhost:9092
+  input_topic:
+    default: freezer_sensor_events
+  output_topic:
+    default: freezer_alerts_enriched
+  metrics_topic:
+    description: Both consumers' StreamingQueryListener write per-batch metrics here; the app reads it once backend_kafka lands.
+    default: freezer_pipeline_metrics
+  kafka_topic_partitions:
+    default: 4
+  kafka_secret_scope:
+    default: signalnow_kafka
+
+  # Producer / consumer behaviour
+  events_per_second:
+    default: 200
+  scenario:
+    default: normal
+  processing_time_interval:
+    default: "5 seconds"
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      profile: ${var.profile}

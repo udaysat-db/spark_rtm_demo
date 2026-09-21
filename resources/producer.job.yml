@@ -1,0 +1,40 @@
+resources:
+  jobs:
+    producer:
+      name: "[${bundle.target}] SignalNow — RTM producer"
+      tasks:
+        - task_key: produce
+          spark_python_task:
+            python_file: ../src/producer/main.py
+            parameters:
+              - "--kafka-bootstrap"
+              - "${var.kafka_bootstrap_servers}"
+              - "--secret-scope"
+              - "${var.kafka_secret_scope}"
+              - "--topic"
+              - "${var.input_topic}"
+              - "--static-path"
+              - "/Volumes/${var.catalog}/${var.schema}/static"
+              - "--checkpoint"
+              - "/Volumes/${var.catalog}/${var.schema}/checkpoints/producer"
+              - "--events-per-second"
+              - "${var.events_per_second}"
+              - "--scenario"
+              - "${var.scenario}"
+          job_cluster_key: rtm
+          libraries:
+            - whl: ../dist/*.whl
+
+      job_clusters:
+        - job_cluster_key: rtm
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type_id}
+            num_workers: ${var.rtm_workers}       # fixed size (no autoscale) — required by RTM
+            data_security_mode: SINGLE_USER        # Dedicated access mode
+            spark_conf:
+              spark.databricks.streaming.realTimeMode.enabled: "true"
+              spark.sql.execution.sortBeforeRepartition: "false"
+            # RTM also requires Photon OFF (do not set runtime_engine: PHOTON) and
+            # spot OFF. Add cloud availability attrs (aws_attributes/azure_attributes:
+            # ON_DEMAND) for your cloud at deploy time.

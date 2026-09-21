@@ -1,0 +1,24 @@
+command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+env:
+  # Mock data by default. Set to "false" to tail live Kafka (KafkaDataSource).
+  - name: USE_MOCK_BACKEND
+    value: "true"
+
+  # --- Live Kafka backend (used when USE_MOCK_BACKEND=false) ---
+  # Non-secret values: set directly. The app SP needs READ on the Kafka secret scope.
+  # - name: KAFKA_BOOTSTRAP
+  #   value: "<host:9092,host:9092>"
+  # - name: KAFKA_ALERTS_TOPIC
+  #   value: "freezer_alerts_enriched"
+  # - name: KAFKA_METRICS_TOPIC
+  #   value: "freezer_pipeline_metrics"
+  # - name: KAFKA_SOURCE_MODE
+  #   value: "rtm"                       # rtm | mb — engine shown first
+  # - name: KAFKA_SASL_MECHANISM
+  #   value: "SCRAM-SHA-512"             # PLAIN | SCRAM-SHA-512 (MSK SASL/SCRAM)
+  # SASL credentials come from the secret scope via valueFrom (never inline):
+  # - name: KAFKA_SASL_USERNAME
+  #   valueFrom: "kafka-sasl-username"
+  # - name: KAFKA_SASL_PASSWORD
+  #   valueFrom: "kafka-sasl-password"

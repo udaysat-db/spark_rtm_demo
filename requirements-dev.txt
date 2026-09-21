@@ -1,0 +1,6 @@
+# Local development / test dependencies. Use a Python 3.10–3.12 venv and a JDK 17.
+# (Runtime on Databricks uses DBR-provided Spark; this is only for local unit tests.)
+pyspark==4.0.0
+pytest>=8.0
+build>=1.0        # `databricks bundle deploy` builds the shared wheel via `python -m build`
+pyyaml>=6.0       # local bundle-yaml sanity checks

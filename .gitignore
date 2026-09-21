@@ -216,3 +216,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local scratch / work-in-progress (never committed)
+scratch/
+
+# Isaac tooling local state
+.isaac/
+
+# Deploy config with real values / secrets — never commit.
+# Copy config.template.yaml → config.yaml and fill it in; the template stays tracked.
+config.yaml
+config.local.yaml
+config.*.local.yaml
+# A workspace-auth file if one is ever dropped in the repo (normally lives at ~/.databrickscfg)
+.databrickscfg

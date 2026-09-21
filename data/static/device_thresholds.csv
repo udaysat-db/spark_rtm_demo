@@ -1,0 +1,6 @@
+freezer_type,temperature_upper_limit,door_open_limit_seconds
+walk_in_freezer,-15.0,180
+reach_in_freezer,-15.0,90
+display_freezer,-12.0,60
+walk_in_cooler,4.0,180
+dairy_case,4.0,60

@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "signalnow-rtm"
+version = "0.1.0"
+description = "Shared cold-chain alerting rules, schemas, latency utils, and scenarios for the SignalNow RTM demo."
+requires-python = ">=3.10"
+
+# Only the shared, engine-agnostic package is bundled into the wheel. The streaming
+# entrypoints in src/ are deployed as job files and import this package.
+[tool.setuptools]
+packages = ["shared"]
