@@ -99,6 +99,7 @@ The **feeder** creates the scope named by `kafka_secret_scope` and populates eve
 | `sasl_mechanism` | pipeline + app | SASL mechanism, e.g. `SCRAM-SHA-512`. Defaults to `PLAIN` when absent | non-PLAIN SASL |
 | `sasl_username` | **live app** | SASL username (same credential as in the JAAS line) — `kafka-python` needs it as a discrete field | only if the **live** app is deployed (§5) |
 | `sasl_password` | **live app** | SASL password | only if the **live** app is deployed (§5) |
+| `kafka_bootstrap` | **live app** | broker endpoint(s) — the **same value** as `config.yaml: kafka_bootstrap_servers`. Held in the scope so the broker endpoint stays out of the committed `app.yaml` (public repo) | only if the **live** app is deployed (§5) |
 
 The **feeder** runs these once, at handoff (it owns the Kafka creds):
 
@@ -108,6 +109,7 @@ databricks secrets put-secret  signalnow_kafka sasl_jaas_config
 databricks secrets put-secret  signalnow_kafka sasl_mechanism   # e.g. SCRAM-SHA-512 (omit for PLAIN)
 databricks secrets put-secret  signalnow_kafka sasl_username    # for the live app
 databricks secrets put-secret  signalnow_kafka sasl_password    # for the live app
+databricks secrets put-secret  signalnow_kafka kafka_bootstrap  # for the live app (broker endpoint; keeps it out of git)
 ```
 
 When `sasl_jaas_config` is present the code uses **SASL_SSL** with the mechanism from
@@ -147,19 +149,19 @@ the jobs, schema, and volumes. Its env lives in `app/app.yaml`.
 | **Mock** (default) | `true` | nothing — deploys fully demoable, no secrets |
 | **Live** (tails Kafka via `KafkaDataSource`) | `false` | the four steps below |
 
-**Going live** — all done by the admin deployer, **no feeder involvement** (the feeder already put
-`sasl_username`/`sasl_password` in the scope at handoff; the app uses `kafka-python`, which needs
-them as discrete fields, not the pipeline's JAAS blob):
+**Going live** — all done by the admin deployer, **no feeder round-trip** (the feeder already put
+`kafka_bootstrap`, `sasl_username`, `sasl_password` in the scope at handoff, §3). The app pulls
+the broker endpoint and SASL creds from the scope, so nothing sensitive lands in the repo:
 
-1. **Uncomment** the two `secret` bindings in
+1. **Uncomment** the three `secret` bindings in
    [`resources/signalnow_console.app.yml`](../resources/signalnow_console.app.yml) — they map
-   scope keys `sasl_username`/`sasl_password` to the app-resource keys
-   `kafka-sasl-username`/`kafka-sasl-password`. They ship commented so the mock deploy needs no
-   secrets; the admin deployer applying them grants the app's SP `READ`.
-2. In `app/app.yaml` set `USE_MOCK_BACKEND=false`, the non-secret `KAFKA_BOOTSTRAP` /
-   `KAFKA_ALERTS_TOPIC` / `KAFKA_METRICS_TOPIC` / `KAFKA_SOURCE_MODE` / `KAFKA_SASL_MECHANISM`,
-   and `KAFKA_SASL_USERNAME` / `KAFKA_SASL_PASSWORD` via `valueFrom: kafka-sasl-username` /
-   `kafka-sasl-password`.
+   scope keys `kafka_bootstrap` / `sasl_username` / `sasl_password` to the app-resource keys
+   `kafka-bootstrap` / `kafka-sasl-username` / `kafka-sasl-password`. They ship commented so the
+   mock deploy needs no secrets; the admin deployer applying them grants the app's SP `READ`.
+2. In `app/app.yaml` set `USE_MOCK_BACKEND=false`; set the generic literals `KAFKA_ALERTS_TOPIC` /
+   `KAFKA_METRICS_TOPIC` / `KAFKA_SOURCE_MODE` / `KAFKA_SASL_MECHANISM`; and set `KAFKA_BOOTSTRAP` /
+   `KAFKA_SASL_USERNAME` / `KAFKA_SASL_PASSWORD` via `valueFrom: kafka-bootstrap` /
+   `kafka-sasl-username` / `kafka-sasl-password`.
 3. `databricks bundle deploy` again.
 
 The store roster ships in the app (`app/fleet_roster.csv`) so the grid renders every store at
@@ -201,7 +203,7 @@ Notes:
 What the **feeder** provides at handoff (then it's done):
 - [ ] `.databrickscfg` profile stanza (or env vars) for a **workspace-admin** identity — §1
 - [ ] filled `config.yaml` (no secrets) — §2
-- [ ] secret scope `signalnow_kafka` **created and populated**: `sasl_jaas_config` (+ `sasl_mechanism` for SCRAM), and `sasl_username`/`sasl_password` for the live app — §3
+- [ ] secret scope `signalnow_kafka` **created and populated**: `sasl_jaas_config` (+ `sasl_mechanism` for SCRAM), and `sasl_username`/`sasl_password`/`kafka_bootstrap` for the live app — §3
 - [ ] network reachable + `input_topic`/`output_topic`/`metrics_topic` created with the right partitions — §4
 
 What the **admin deployer** does after handoff (no feeder round-trip):
