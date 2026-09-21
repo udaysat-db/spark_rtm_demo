@@ -93,8 +93,8 @@ pipeline runs. **Inject burst** and the **RTM / Micro-batch** toggle simulate th
 ```bash
 cp config.template.yaml config.yaml   # fill in profile, catalog, Kafka, DBR, node type
 
-# Create the Kafka secret scope values out of band (the bundle creates the empty scope):
-databricks secrets put-secret <scope> sasl_jaas_config --profile <profile>
+# The Kafka cluster, topics, and the secret scope (created + populated) come from your
+# infra/feeder setup; the deploy runs as a workspace admin. See docs/deploy-contract.md.
 
 ./scripts/deploy.sh                    # deploy the bundle + upload enrichment CSVs
 ./scripts/run.sh producer              # start each job (streaming, runs continuously)

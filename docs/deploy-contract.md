@@ -1,16 +1,16 @@
 # Deploy contract
 
-**SignalNow deploys itself.** Running `databricks bundle deploy` (jobs, schema, volumes,
-secret scope, app) and starting the jobs is *this* repo's responsibility — via `scripts/deploy.sh`
-/ `scripts/run.sh` (see the [README](../README.md) Quickstart). This repo provisions **no
+**SignalNow deploys itself.** Running `databricks bundle deploy` (jobs, schema, volumes, app)
+and starting the jobs is *this* repo's responsibility — via `scripts/deploy.sh` /
+`scripts/run.sh` (see the [README](../README.md) Quickstart). This repo provisions **no
 infrastructure**, though: the Databricks workspace and the Kafka cluster are bring-your-own,
 and secrets live in a Databricks secret scope, not the repo.
 
-A separate **infra / feeder repo** owns those **prerequisites** — the workspace, the Kafka
-cluster + topics, network reachability, and the catalog + grants — and populates the secret
-scope. It hands this project an auth profile and the non-secret config values below; it does
-**not** run SignalNow's deployment. This document is the contract between the two: exactly
-what the feeder must provide, in the format the code and bundle read it.
+A separate **infra / feeder repo** builds those **prerequisites** — the workspace, the Kafka
+cluster + topics, network reachability, the catalog + grants — and **creates the secret scope and
+populates every key**. It hands this project an auth profile and the non-secret config values
+below, then it's **done** — the deploy needs nothing further from it. This document is the
+contract between the two: exactly what the feeder must provide, in the format the code reads it.
 
 Kafka is the only sink (see [alerting-logic.md](./alerting-logic.md) and
 [data-model.md](./data-model.md)). **Do not provision Lakebase or a SQL warehouse** —
@@ -42,13 +42,14 @@ client_id     = <sp-client-id>
 client_secret = <sp-client-secret>
 ```
 
-**Why admin.** The deploy creates a schema, volumes, a secret scope, jobs, and the app; manages
-the scope's ACLs to grant the app's service principal read; and its jobs read the Kafka secret at
-runtime — so the deployer's identity can read those creds regardless. Rather than assemble the
-individual grants (`USE CATALOG` + `CREATE SCHEMA` + `CREATE VOLUME` on the catalog, `MANAGE` on
-the scope, plus the Apps entitlement), the demo just requires **workspace admin**.
-*Least-privilege alternative:* grant exactly those and run the jobs as a dedicated `run_as`
-service principal, so the human deployer never holds the credentials.
+**Why admin.** After the feeder hands over, the deployer must be **self-sufficient — no return
+trips for grants**. Admin lets one identity create the schema/volumes/jobs/app, **grant the app's
+service principal `READ` on the feeder's scope** (the app SP is spawned during app creation, so
+this grant can only happen at deploy time — the feeder can't pre-grant a principal that doesn't
+exist yet), and read the secret for the jobs. Rather than assemble the individual grants
+(`USE CATALOG` + `CREATE SCHEMA` + `CREATE VOLUME`, scope `MANAGE`, the Apps entitlement) *and*
+coordinate the app-SP grant back with the feeder, the demo just requires **workspace admin**.
+*(Least-privilege alternative: those explicit grants + a dedicated `run_as` SP.)*
 
 ## 2. Non-secret config values — `config.yaml`
 
@@ -84,9 +85,9 @@ broadcast enrichment (no shuffle) → `transformWithState` (one shuffle,
 
 ## 3. Kafka secrets — Databricks secret scope
 
-The bundle creates the **empty** scope named by `kafka_secret_scope`; infra populates it. The
-**pipeline** (Spark, `shared/kafka_io.py`) and the **live app** (`kafka-python`) authenticate
-the same credential in two different forms, so the scope holds both:
+The **feeder** creates the scope named by `kafka_secret_scope` and populates every key at handoff
+(the bundle does **not** create it). The **pipeline** (Spark, `shared/kafka_io.py`) and the
+**live app** (`kafka-python`) authenticate the same credential in two forms, so the scope holds both:
 
 | Scope key | Used by | Value format | Required |
 |---|---|---|---|
@@ -95,13 +96,14 @@ the same credential in two different forms, so the scope holds both:
 | `sasl_username` | **live app** | SASL username (same credential as in the JAAS line) — `kafka-python` needs it as a discrete field | only if the **live** app is deployed (§5) |
 | `sasl_password` | **live app** | SASL password | only if the **live** app is deployed (§5) |
 
+The **feeder** runs these once, at handoff (it owns the Kafka creds):
+
 ```bash
 databricks secrets create-scope signalnow_kafka
 databricks secrets put-secret  signalnow_kafka sasl_jaas_config
 databricks secrets put-secret  signalnow_kafka sasl_mechanism   # e.g. SCRAM-SHA-512 (omit for PLAIN)
-# Only if deploying the LIVE app (mock app needs none of these):
-databricks secrets put-secret  signalnow_kafka sasl_username
-databricks secrets put-secret  signalnow_kafka sasl_password
+databricks secrets put-secret  signalnow_kafka sasl_username    # for the live app
+databricks secrets put-secret  signalnow_kafka sasl_password    # for the live app
 ```
 
 When `sasl_jaas_config` is present the code uses **SASL_SSL** with the mechanism from
@@ -109,12 +111,10 @@ When `sasl_jaas_config` is present the code uses **SASL_SSL** with the mechanism
 Confluent Cloud SCRAM) is supported by setting `sasl_mechanism` + a shaded SCRAM
 `sasl_jaas_config`. mTLS / cloud-IAM (MSK IAM) still need `kafka_options()` extending.
 
-**Scope permissions.** The deployer is a **workspace admin** (§1), so creating the scope,
-managing its ACLs (to grant the app's SP read), and reading secrets all just work — no
-per-principal grant juggling. Crucially, the **feeder populates the credential values** (it owns
-them from provisioning Kafka and runs `databricks secrets put-secret` itself); the deployer/bundle
-only creates the **empty** scope, so no raw credential is handed to the deployer. The jobs' run
-identity reads `sasl_jaas_config` at runtime (the admin deployer, unless a `run_as` is set).
+**Scope permissions.** The **feeder** owns the scope and its values; the deployer never receives a
+raw credential. Because the deployer is a **workspace admin** (§1), it can grant the app's SP
+`READ` on the feeder's scope and read `sasl_jaas_config` for the jobs — all at deploy time, with
+**no return to the feeder**. The jobs' run identity is the admin deployer (unless a `run_as` is set).
 
 ## 4. Preconditions the infra repo owns
 
@@ -136,27 +136,27 @@ Not credentials, but they block the run:
 
 The console is a Databricks App and a **bundle resource**
 (`resources/signalnow_console.app.yml`), so `databricks bundle deploy` creates it alongside
-the jobs, schema, volumes, and secret scope. Its env lives in `app/app.yaml`.
+the jobs, schema, and volumes. Its env lives in `app/app.yaml`.
 
 | Mode | `USE_MOCK_BACKEND` | Needs |
 |---|---|---|
 | **Mock** (default) | `true` | nothing — deploys fully demoable, no secrets |
 | **Live** (tails Kafka via `KafkaDataSource`) | `false` | the four steps below |
 
-**Going live** (the app uses `kafka-python`, which needs the SASL username/password as
-discrete fields — not the pipeline's JAAS blob):
+**Going live** — all done by the admin deployer, **no feeder involvement** (the feeder already put
+`sasl_username`/`sasl_password` in the scope at handoff; the app uses `kafka-python`, which needs
+them as discrete fields, not the pipeline's JAAS blob):
 
-1. **Feeder** adds `sasl_username` + `sasl_password` to the scope (§3).
-2. **Uncomment** the two `secret` bindings in
+1. **Uncomment** the two `secret` bindings in
    [`resources/signalnow_console.app.yml`](../resources/signalnow_console.app.yml) — they map
    scope keys `sasl_username`/`sasl_password` to the app-resource keys
-   `kafka-sasl-username`/`kafka-sasl-password` (and grant the app's SP `READ`). They ship
-   commented so the mock deploy needs no secrets.
-3. In `app/app.yaml` set `USE_MOCK_BACKEND=false`, the non-secret `KAFKA_BOOTSTRAP` /
+   `kafka-sasl-username`/`kafka-sasl-password`. They ship commented so the mock deploy needs no
+   secrets; the admin deployer applying them grants the app's SP `READ`.
+2. In `app/app.yaml` set `USE_MOCK_BACKEND=false`, the non-secret `KAFKA_BOOTSTRAP` /
    `KAFKA_ALERTS_TOPIC` / `KAFKA_METRICS_TOPIC` / `KAFKA_SOURCE_MODE` / `KAFKA_SASL_MECHANISM`,
    and `KAFKA_SASL_USERNAME` / `KAFKA_SASL_PASSWORD` via `valueFrom: kafka-sasl-username` /
    `kafka-sasl-password`.
-4. `databricks bundle deploy` again.
+3. `databricks bundle deploy` again.
 
 The store roster ships in the app (`app/fleet_roster.csv`) so the grid renders every store at
 rest. There is **no `PGHOST/PGUSER/...`** — that was the removed Lakebase path.
@@ -171,7 +171,7 @@ already reads it, and pass only *names* to the session.
 |---|---|---|
 | **Auth** | a working **workspace-admin** profile in `~/.databrickscfg` (a human's `databricks auth login`, or an SP's `client_secret` for CI), or the `DATABRICKS_*` env vars | `--profile <name>` — any secret stays in `~/.databrickscfg`, never pasted |
 | **Non-secret config** | a filled `config.yaml` at the repo root (gitignored; from `config.template.yaml`) | `./scripts/deploy.sh` reads it |
-| **Kafka SASL creds** | infra **populates the secret scope itself** (`databricks secrets put-secret <scope> sasl_jaas_config` [+ `sasl_mechanism`]) with its own access | referenced by scope **name** only — the session never handles the raw JAAS/password |
+| **Kafka SASL creds** | infra **creates the scope and populates every key itself** (`sasl_jaas_config`, `sasl_mechanism`, and `sasl_username`/`sasl_password` for the app) with its own access | referenced by scope **name** only — the session never handles the raw creds |
 
 Then the session runs:
 
@@ -192,14 +192,17 @@ Notes:
   themselves (in Claude Code, prefix with `!` so it runs in-session), then tells the session
   to use that profile. Assistants must **never auto-select a profile**.
 
-## Handoff checklist (what the infra repo provides)
+## Checklist
 
-- [ ] `.databrickscfg` profile stanza (or the equivalent env vars) for a **workspace-admin** identity — §1
+What the **feeder** provides at handoff (then it's done):
+- [ ] `.databrickscfg` profile stanza (or env vars) for a **workspace-admin** identity — §1
 - [ ] filled `config.yaml` (no secrets) — §2
-- [ ] secret scope `signalnow_kafka` populated with `sasl_jaas_config` (+ `sasl_mechanism` for SCRAM) — §3
+- [ ] secret scope `signalnow_kafka` **created and populated**: `sasl_jaas_config` (+ `sasl_mechanism` for SCRAM), and `sasl_username`/`sasl_password` for the live app — §3
 - [ ] network reachable + `input_topic`/`output_topic`/`metrics_topic` created with the right partitions — §4
-- [ ] (if app is live) scope also holds `sasl_username` + `sasl_password`; the two `secret`
-      bindings uncommented in the app resource; `app/app.yaml` set to `USE_MOCK_BACKEND=false` + `KAFKA_*` — §5
+
+What the **admin deployer** does after handoff (no feeder round-trip):
+- [ ] `./scripts/deploy.sh` then `./scripts/run.sh producer rtm_consumer microbatch_consumer` — §6
+- [ ] (to go live) uncomment the app secret bindings + set `app/app.yaml` `USE_MOCK_BACKEND=false` + `KAFKA_*`, redeploy — §5
 
 ## Open item
 

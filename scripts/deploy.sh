@@ -34,8 +34,8 @@ done
 cat <<EOF
 
 Deployed. Next:
-  1) Add Kafka secret values (the bundle created the empty scope '$(cfg kafka_secret_scope)'):
-       databricks secrets put-secret $(cfg kafka_secret_scope) sasl_jaas_config --profile $PROFILE
+  1) Confirm the feeder-provisioned secret scope '$(cfg kafka_secret_scope)' exists and is
+     populated (sasl_jaas_config [+ sasl_mechanism]). The bundle does NOT create it.
   2) Start the jobs (each streams continuously; run in separate terminals):
        ./scripts/run.sh producer
        ./scripts/run.sh rtm_consumer
