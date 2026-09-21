@@ -22,10 +22,9 @@ that path was removed. DBR **18.1+** is sufficient.
 
 ## 1. Databricks workspace auth
 
-Used by `databricks bundle deploy` / `run`. **Any profile that authenticates to the target
-workspace with the grants below works — your own user login is fine.** Use a service principal
-only for **unattended / CI** deploys, or when you want the jobs and app to run as a stable
-non-human identity. Forms:
+Used by `databricks bundle deploy` / `run`. **The SignalNow deployer must be a workspace admin**
+— a deliberate simplification for the demo (see *Why admin* below). Any auth form works for that
+identity: for a human, your own login; a service principal for unattended / CI. Forms:
 
 | Form | Supply | Where it goes |
 |---|---|---|
@@ -43,9 +42,13 @@ client_id     = <sp-client-id>
 client_secret = <sp-client-secret>
 ```
 
-**Grants the deploy principal needs:** `USE CATALOG` + `CREATE SCHEMA` + `CREATE VOLUME`
-on the target catalog; workspace rights to create jobs, secret scopes, and (if deployed)
-the Databricks App.
+**Why admin.** The deploy creates a schema, volumes, a secret scope, jobs, and the app; manages
+the scope's ACLs to grant the app's service principal read; and its jobs read the Kafka secret at
+runtime — so the deployer's identity can read those creds regardless. Rather than assemble the
+individual grants (`USE CATALOG` + `CREATE SCHEMA` + `CREATE VOLUME` on the catalog, `MANAGE` on
+the scope, plus the Apps entitlement), the demo just requires **workspace admin**.
+*Least-privilege alternative:* grant exactly those and run the jobs as a dedicated `run_as`
+service principal, so the human deployer never holds the credentials.
 
 ## 2. Non-secret config values — `config.yaml`
 
@@ -106,16 +109,12 @@ When `sasl_jaas_config` is present the code uses **SASL_SSL** with the mechanism
 Confluent Cloud SCRAM) is supported by setting `sasl_mechanism` + a shaded SCRAM
 `sasl_jaas_config`. mTLS / cloud-IAM (MSK IAM) still need `kafka_options()` extending.
 
-**Scope permissions:**
-- The **job-cluster run identity** needs **`READ`** — the streaming jobs read `sasl_jaas_config`
-  at runtime. `SINGLE_USER` clusters run as the deploying principal unless a `run_as` is set.
-- The **SignalNow deployer** needs **`MANAGE`** (for the live app): the app-resource binding
-  grants the app's SP `READ` *during deploy*, and adding that ACL is a MANAGE-level action.
-  `MANAGE` also implies read — so a deployer who can wire the app can read the Kafka creds
-  (unavoidable in this model, and the run identity needs READ anyway).
-- Simplest path: **the bundle creates the scope**, so the deployer owns it (MANAGE)
-  automatically. If the **feeder** pre-creates the scope, it must grant the deployer MANAGE.
-  The deployer is **not** required to be a workspace admin (see §1 grants).
+**Scope permissions.** The deployer is a **workspace admin** (§1), so creating the scope,
+managing its ACLs (to grant the app's SP read), and reading secrets all just work — no
+per-principal grant juggling. Crucially, the **feeder populates the credential values** (it owns
+them from provisioning Kafka and runs `databricks secrets put-secret` itself); the deployer/bundle
+only creates the **empty** scope, so no raw credential is handed to the deployer. The jobs' run
+identity reads `sasl_jaas_config` at runtime (the admin deployer, unless a `run_as` is set).
 
 ## 4. Preconditions the infra repo owns
 
@@ -170,7 +169,7 @@ already reads it, and pass only *names* to the session.
 
 | Need | Infra lands it at | The session uses |
 |---|---|---|
-| **Auth** | a working profile in `~/.databrickscfg` (a human's `databricks auth login`, or an SP's `client_secret` for CI), or the `DATABRICKS_*` env vars | `--profile <name>` — any secret stays in `~/.databrickscfg`, never pasted |
+| **Auth** | a working **workspace-admin** profile in `~/.databrickscfg` (a human's `databricks auth login`, or an SP's `client_secret` for CI), or the `DATABRICKS_*` env vars | `--profile <name>` — any secret stays in `~/.databrickscfg`, never pasted |
 | **Non-secret config** | a filled `config.yaml` at the repo root (gitignored; from `config.template.yaml`) | `./scripts/deploy.sh` reads it |
 | **Kafka SASL creds** | infra **populates the secret scope itself** (`databricks secrets put-secret <scope> sasl_jaas_config` [+ `sasl_mechanism`]) with its own access | referenced by scope **name** only — the session never handles the raw JAAS/password |
 
@@ -195,7 +194,7 @@ Notes:
 
 ## Handoff checklist (what the infra repo provides)
 
-- [ ] `.databrickscfg` profile stanza (or the equivalent env vars) — §1
+- [ ] `.databrickscfg` profile stanza (or the equivalent env vars) for a **workspace-admin** identity — §1
 - [ ] filled `config.yaml` (no secrets) — §2
 - [ ] secret scope `signalnow_kafka` populated with `sasl_jaas_config` (+ `sasl_mechanism` for SCRAM) — §3
 - [ ] network reachable + `input_topic`/`output_topic`/`metrics_topic` created with the right partitions — §4
