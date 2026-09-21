@@ -23,12 +23,18 @@ shuffle_partitions: 8                       # spark.sql.shuffle.partitions for t
 kafka_bootstrap_servers: <host:9092,host:9092>
 input_topic: freezer_sensor_events
 output_topic: freezer_alerts_enriched
-metrics_topic: freezer_pipeline_metrics     # consumers' StreamingQueryListener write here; the app reads it once backend_kafka lands
+metrics_topic: freezer_pipeline_metrics     # consumers' StreamingQueryListener write here; the live app reads it
 kafka_topic_partitions: 4                   # must equal the real topic partition count (drives RTM slot math)
-# Credentials are read at runtime from the secret scope below (never committed):
+# Credentials/endpoint are read at runtime from the secret scope below (never committed).
+# The feeder populates it — see docs/deploy-contract.md §3:
 kafka_secret_scope: signalnow_kafka
 #   databricks secrets create-scope signalnow_kafka
-#   databricks secrets put-secret  signalnow_kafka sasl_jaas_config   # if the broker uses SASL
+#   databricks secrets put-secret  signalnow_kafka sasl_jaas_config   # pipeline (if SASL)
+#   databricks secrets put-secret  signalnow_kafka sasl_mechanism     # e.g. SCRAM-SHA-512 (omit for PLAIN)
+#   # live app (kafka-python) also needs, as discrete scope keys:
+#   databricks secrets put-secret  signalnow_kafka sasl_username
+#   databricks secrets put-secret  signalnow_kafka sasl_password
+#   databricks secrets put-secret  signalnow_kafka kafka_bootstrap    # = kafka_bootstrap_servers above
 
 # --- Producer defaults ---
 events_per_second: 200
