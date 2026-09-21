@@ -81,18 +81,24 @@ broadcast enrichment (no shuffle) → `transformWithState` (one shuffle,
 
 ## 3. Kafka secrets — Databricks secret scope
 
-The bundle creates the **empty** scope named by `kafka_secret_scope`; infra populates it.
-Exact keys the code reads ([`shared/kafka_io.py`](../shared/kafka_io.py)):
+The bundle creates the **empty** scope named by `kafka_secret_scope`; infra populates it. The
+**pipeline** (Spark, `shared/kafka_io.py`) and the **live app** (`kafka-python`) authenticate
+the same credential in two different forms, so the scope holds both:
 
-| Scope key | Value format | Required |
-|---|---|---|
-| `sasl_jaas_config` | full JAAS line for the broker's mechanism. PLAIN: `org.apache.kafka.common.security.plain.PlainLoginModule required username="<key>" password="<secret>";` — SCRAM: `kafkashaded.org.apache.kafka.common.security.scram.ScramLoginModule required username="<user>" password="<pw>";` (the `kafkashaded.` prefix is required on Databricks — the Spark Kafka connector is shaded) | only if the broker uses SASL |
-| `sasl_mechanism` | SASL mechanism, e.g. `SCRAM-SHA-512`. Optional — defaults to `PLAIN` when absent | only for non-PLAIN SASL (SCRAM, etc.) |
+| Scope key | Used by | Value format | Required |
+|---|---|---|---|
+| `sasl_jaas_config` | pipeline (Spark) | full JAAS line. PLAIN: `org.apache.kafka.common.security.plain.PlainLoginModule required username="<key>" password="<secret>";` — SCRAM: `kafkashaded.org.apache.kafka.common.security.scram.ScramLoginModule required username="<user>" password="<pw>";` (the `kafkashaded.` prefix is required on Databricks — the Spark Kafka connector is shaded) | if the broker uses SASL |
+| `sasl_mechanism` | pipeline + app | SASL mechanism, e.g. `SCRAM-SHA-512`. Defaults to `PLAIN` when absent | non-PLAIN SASL |
+| `sasl_username` | **live app** | SASL username (same credential as in the JAAS line) — `kafka-python` needs it as a discrete field | only if the **live** app is deployed (§5) |
+| `sasl_password` | **live app** | SASL password | only if the **live** app is deployed (§5) |
 
 ```bash
 databricks secrets create-scope signalnow_kafka
 databricks secrets put-secret  signalnow_kafka sasl_jaas_config
 databricks secrets put-secret  signalnow_kafka sasl_mechanism   # e.g. SCRAM-SHA-512 (omit for PLAIN)
+# Only if deploying the LIVE app (mock app needs none of these):
+databricks secrets put-secret  signalnow_kafka sasl_username
+databricks secrets put-secret  signalnow_kafka sasl_password
 ```
 
 When `sasl_jaas_config` is present the code uses **SASL_SSL** with the mechanism from
@@ -126,8 +132,23 @@ the jobs, schema, volumes, and secret scope. Its env lives in `app/app.yaml`.
 
 | Mode | `USE_MOCK_BACKEND` | Needs |
 |---|---|---|
-| **Mock** (default) | `true` | nothing — deploys fully demoable |
-| **Live** (tails Kafka via `KafkaDataSource`) | `false` | set the `KAFKA_*` env in `app/app.yaml` (bootstrap, topics, source mode); SASL creds via `valueFrom` from `${var.kafka_secret_scope}`; grant the app's service principal `READ` on that scope |
+| **Mock** (default) | `true` | nothing — deploys fully demoable, no secrets |
+| **Live** (tails Kafka via `KafkaDataSource`) | `false` | the four steps below |
+
+**Going live** (the app uses `kafka-python`, which needs the SASL username/password as
+discrete fields — not the pipeline's JAAS blob):
+
+1. **Feeder** adds `sasl_username` + `sasl_password` to the scope (§3).
+2. **Uncomment** the two `secret` bindings in
+   [`resources/signalnow_console.app.yml`](../resources/signalnow_console.app.yml) — they map
+   scope keys `sasl_username`/`sasl_password` to the app-resource keys
+   `kafka-sasl-username`/`kafka-sasl-password` (and grant the app's SP `READ`). They ship
+   commented so the mock deploy needs no secrets.
+3. In `app/app.yaml` set `USE_MOCK_BACKEND=false`, the non-secret `KAFKA_BOOTSTRAP` /
+   `KAFKA_ALERTS_TOPIC` / `KAFKA_METRICS_TOPIC` / `KAFKA_SOURCE_MODE` / `KAFKA_SASL_MECHANISM`,
+   and `KAFKA_SASL_USERNAME` / `KAFKA_SASL_PASSWORD` via `valueFrom: kafka-sasl-username` /
+   `kafka-sasl-password`.
+4. `databricks bundle deploy` again.
 
 The store roster ships in the app (`app/fleet_roster.csv`) so the grid renders every store at
 rest. There is **no `PGHOST/PGUSER/...`** — that was the removed Lakebase path.
@@ -169,7 +190,8 @@ Notes:
 - [ ] filled `config.yaml` (no secrets) — §2
 - [ ] secret scope `signalnow_kafka` populated with `sasl_jaas_config` (+ `sasl_mechanism` for SCRAM) — §3
 - [ ] network reachable + `input_topic`/`output_topic`/`metrics_topic` created with the right partitions — §4
-- [ ] (if app is live) app SP granted `READ` on the scope — §5
+- [ ] (if app is live) scope also holds `sasl_username` + `sasl_password`; the two `secret`
+      bindings uncommented in the app resource; `app/app.yaml` set to `USE_MOCK_BACKEND=false` + `KAFKA_*` — §5
 
 ## Open item
 

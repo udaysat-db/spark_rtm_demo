@@ -5,8 +5,24 @@ resources:
       description: "SignalNow RTM console — live cold-chain cockpit (tails Kafka alerts + metrics)."
       # The whole app/ directory ships (FastAPI backend, static UI, fleet_roster.csv).
       source_code_path: ../app
-      # Env lives in app/app.yaml, NOT here (Databricks Apps read env from the source
-      # app.yaml). It defaults to USE_MOCK_BACKEND=true, so the app deploys fully demoable
-      # with no Kafka wiring. To go live, set USE_MOCK_BACKEND=false and the KAFKA_* env in
-      # app/app.yaml (SASL creds via valueFrom from the ${var.kafka_secret_scope} scope) —
-      # see docs/deploy-contract.md §5. Grant the app's service principal READ on that scope.
+      # Env lives in app/app.yaml (Databricks Apps read env from the source app.yaml) and
+      # defaults to USE_MOCK_BACKEND=true — so the app deploys fully demoable with NO Kafka
+      # wiring or secrets. To go LIVE (USE_MOCK_BACKEND=false), the app (kafka-python) needs
+      # the SASL username + password as SEPARATE secrets (the pipeline's sasl_jaas_config blob
+      # can't be used by kafka-python). Uncomment the bindings below AFTER the feeder has put
+      # sasl_username / sasl_password in the scope, and set the KAFKA_* env + valueFrom in
+      # app/app.yaml. See docs/deploy-contract.md §3 and §5. (Left commented so the default
+      # mock deploy needs no secrets — an active binding requires the scope key to exist.)
+      # resources:
+      #   - name: kafka-sasl-username        # the key app/app.yaml references via valueFrom
+      #     description: "Kafka SASL username for the live console"
+      #     secret:
+      #       scope: ${var.kafka_secret_scope}
+      #       key: sasl_username
+      #       permission: READ
+      #   - name: kafka-sasl-password
+      #     description: "Kafka SASL password for the live console"
+      #     secret:
+      #       scope: ${var.kafka_secret_scope}
+      #       key: sasl_password
+      #       permission: READ
