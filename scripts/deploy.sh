@@ -18,8 +18,9 @@ TARGET="${1:-dev}"
 # Pass config values through as bundle variables (only those actually set).
 VARS=()
 addvar() { local v; v="$(cfg "$1")"; [ -n "$v" ] && VARS+=("--var=$1=$v"); }
-for k in profile catalog schema spark_version node_type_id \
-         kafka_bootstrap_servers input_topic output_topic kafka_secret_scope \
+for k in profile catalog schema spark_version node_type_id rtm_workers \
+         kafka_bootstrap_servers input_topic output_topic metrics_topic \
+         kafka_topic_partitions kafka_secret_scope \
          events_per_second scenario processing_time_interval; do addvar "$k"; done
 
 echo "==> databricks bundle deploy (target=$TARGET, profile=$PROFILE)"

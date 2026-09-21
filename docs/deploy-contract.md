@@ -64,7 +64,8 @@ rtm_workers: 2                        # worker vCPUs >= Σ partitions across sta
 kafka_bootstrap_servers: pkc-abc12.us-east-1.aws.confluent.cloud:9092
 input_topic: freezer_sensor_events
 output_topic: freezer_alerts_enriched
-kafka_topic_partitions: 4             # MUST equal the real topic partition count
+metrics_topic: freezer_pipeline_metrics   # StreamingQueryListener → app (1 partition is enough)
+kafka_topic_partitions: 4             # MUST equal the real input/output topic partition count
 
 kafka_secret_scope: signalnow_kafka
 
