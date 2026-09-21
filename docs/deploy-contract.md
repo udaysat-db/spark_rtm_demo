@@ -126,8 +126,15 @@ raw credential. Because the deployer is a **workspace admin** (§1), it can gran
 
 Not credentials, but they block the run:
 
-- **Network reachability** — the workspace/cluster must reach the brokers (VPC peering /
-  PrivateLink / security-group rules). RTM breaks on interruption, so keep it stable.
+- **Network reachability** — two *separate* paths must reach the brokers:
+  1. **The job clusters** (producer + consumers, in the workspace VPC) — for the pipeline.
+     RTM breaks on interruption, so keep it stable.
+  2. **The Databricks App compute** — if the live console is used. Apps run on separate
+     Apps infrastructure with their *own* egress, **not** the cluster's VPC path, so a working
+     pipeline does **not** imply the app can reach Kafka. The feeder must enable Apps→broker
+     egress (workspace serverless/Apps networking + the MSK security group allowing it).
+     Symptom when missing: the app logs `KafkaTimeoutError: Unable to bootstrap from [...]`
+     while the jobs run fine. (Mock mode needs no network.)
 - **Topics pre-created** — `input_topic` and `output_topic`, each with
   `kafka_topic_partitions` partitions (this count feeds RTM slot math, so make it
   intentional), plus `metrics_topic` (1 partition is enough) — both consumers'
