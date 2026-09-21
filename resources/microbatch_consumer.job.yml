@@ -40,3 +40,5 @@ resources:
             spark_conf:
               # No RTM here (the deliberate contrast); still pin the stateful shuffle small.
               spark.sql.shuffle.partitions: "${var.shuffle_partitions}"
+            aws_attributes:
+              availability: ON_DEMAND   # on-demand so the streaming job isn't interrupted

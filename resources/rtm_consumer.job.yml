@@ -40,4 +40,6 @@ resources:
               spark.databricks.streaming.realTimeMode.enabled: "true"
               spark.sql.execution.sortBeforeRepartition: "false"
               spark.sql.shuffle.partitions: "${var.shuffle_partitions}"
-            # Photon OFF, spot OFF. Add cloud availability attrs at deploy time.
+            # RTM requires Photon OFF (do not set runtime_engine: PHOTON) and spot OFF.
+            aws_attributes:
+              availability: ON_DEMAND   # Azure: use azure_attributes.availability: ON_DEMAND
