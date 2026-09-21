@@ -1,9 +1,16 @@
 # Deploy contract
 
-Everything the deploy needs, in the exact format the code and bundle read it — so a
-separate infra repo can provision it and hand it over. **This repo provisions no
-infrastructure**: the Kafka cluster and the Databricks workspace are bring-your-own,
-and secrets go into a Databricks secret scope out of band.
+**SignalNow deploys itself.** Running `databricks bundle deploy` (jobs, schema, volumes,
+secret scope, app) and starting the jobs is *this* repo's responsibility — via `scripts/deploy.sh`
+/ `scripts/run.sh` (see the [README](../README.md) Quickstart). This repo provisions **no
+infrastructure**, though: the Databricks workspace and the Kafka cluster are bring-your-own,
+and secrets live in a Databricks secret scope, not the repo.
+
+A separate **infra / feeder repo** owns those **prerequisites** — the workspace, the Kafka
+cluster + topics, network reachability, and the catalog + grants — and populates the secret
+scope. It hands this project an auth profile and the non-secret config values below; it does
+**not** run SignalNow's deployment. This document is the contract between the two: exactly
+what the feeder must provide, in the format the code and bundle read it.
 
 Kafka is the only sink (see [alerting-logic.md](./alerting-logic.md) and
 [data-model.md](./data-model.md)). **Do not provision Lakebase or a SQL warehouse** —
@@ -15,19 +22,22 @@ that path was removed. DBR **18.1+** is sufficient.
 
 ## 1. Databricks workspace auth
 
-Used by `databricks bundle deploy` / `run`. A service principal is best for an infra
-repo. Any one form:
+Used by `databricks bundle deploy` / `run`. **Any profile that authenticates to the target
+workspace with the grants below works — your own user login is fine.** Use a service principal
+only for **unattended / CI** deploys, or when you want the jobs and app to run as a stable
+non-human identity. Forms:
 
 | Form | Supply | Where it goes |
 |---|---|---|
-| **OAuth M2M** (preferred) | `host` (https workspace URL), `client_id`, `client_secret` | `.databrickscfg` profile, or env `DATABRICKS_HOST` / `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET` |
-| PAT | `host`, `token` | `.databrickscfg` profile, or env `DATABRICKS_HOST` / `DATABRICKS_TOKEN` |
+| **User OAuth** (interactive; simplest for a human deploy) | `host` — run `databricks auth login --host <url> --profile <name>` | writes the `.databrickscfg` profile for you |
+| **OAuth M2M** (service principal; unattended / CI) | `host`, `client_id`, `client_secret` | `.databrickscfg` profile, or env `DATABRICKS_HOST` / `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET` |
+| **PAT** | `host`, `token` | `.databrickscfg` profile, or env `DATABRICKS_HOST` / `DATABRICKS_TOKEN` |
 
-The bundle references a **profile name** (`config.yaml: profile`). Cleanest handoff is a
-`.databrickscfg` stanza (this file is gitignored in-repo; normally it lives at `~/.databrickscfg`):
+The bundle references a **profile name** (`config.yaml: profile`). For the SP/CI case the
+handoff is a `.databrickscfg` stanza (gitignored in-repo; normally at `~/.databrickscfg`):
 
 ```ini
-[signalnow]
+[signalnow]                                          # service-principal example
 host          = https://<workspace>.cloud.databricks.com
 client_id     = <sp-client-id>
 client_secret = <sp-client-secret>
@@ -129,7 +139,7 @@ already reads it, and pass only *names* to the session.
 
 | Need | Infra lands it at | The session uses |
 |---|---|---|
-| **Auth** | a service-principal OAuth profile in `~/.databrickscfg` (`host` + `client_id` + `client_secret`), or `DATABRICKS_HOST` / `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET` exported in the shell | `--profile <name>` — the secret stays in `~/.databrickscfg`, never pasted |
+| **Auth** | a working profile in `~/.databrickscfg` (a human's `databricks auth login`, or an SP's `client_secret` for CI), or the `DATABRICKS_*` env vars | `--profile <name>` — any secret stays in `~/.databrickscfg`, never pasted |
 | **Non-secret config** | a filled `config.yaml` at the repo root (gitignored; from `config.template.yaml`) | `./scripts/deploy.sh` reads it |
 | **Kafka SASL creds** | infra **populates the secret scope itself** (`databricks secrets put-secret <scope> sasl_jaas_config` [+ `sasl_mechanism`]) with its own access | referenced by scope **name** only — the session never handles the raw JAAS/password |
 
@@ -145,10 +155,12 @@ place**, and that the **secret scope is populated and the topics exist**. Nothin
 to appear in the conversation.
 
 Notes:
-- Prefer a **fresh SP profile** with deploy grants (§1) — interactive-login tokens expire.
-- For interactive OAuth instead of an SP, a human runs `databricks auth login --host <url>
-  --profile <name>` themselves (in Claude Code, prefix with `!` so it runs in-session), then
-  tells the session to use that profile. Assistants must **never auto-select a profile**.
+- Any profile with the deploy grants (§1) works — a human's own login is fine. Reach for a
+  service principal only for unattended / CI runs. Interactive-login tokens do expire, so
+  re-auth if a run fails on auth.
+- For interactive OAuth, a human runs `databricks auth login --host <url> --profile <name>`
+  themselves (in Claude Code, prefix with `!` so it runs in-session), then tells the session
+  to use that profile. Assistants must **never auto-select a profile**.
 
 ## Handoff checklist (what the infra repo provides)
 
