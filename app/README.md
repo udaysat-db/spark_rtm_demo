@@ -31,9 +31,11 @@ PIP_USER=0 .venv/bin/python -m pip install -r app/requirements.txt
 Controls (mock only): **Inject burst** drives a fleet-hot-zone surge; the **RTM /
 Micro-batch** toggle previews the same UI under each latency profile.
 
-## Deploy (live data)
+## Deploy
 
-Add an app resource to the bundle (or `databricks apps deploy`), set
-`USE_MOCK_BACKEND=false`, and set the `KAFKA_*` env in `app.yaml` (bootstrap, topics,
-source mode, and SASL creds via `valueFrom` from the Kafka secret scope). The app SP
-needs `READ` on that scope. No database is attached — the app reads only Kafka.
+The app is a **bundle resource** (`resources/signalnow_console.app.yml`), so
+`databricks bundle deploy` (or `./scripts/deploy.sh`) creates it with the jobs — mock data
+by default, fully demoable. To go live, set `USE_MOCK_BACKEND=false` and the `KAFKA_*` env in
+`app.yaml` (bootstrap, topics, source mode, and SASL creds via `valueFrom` from the Kafka
+secret scope); grant the app SP `READ` on that scope. No database is attached — the app reads
+only Kafka.

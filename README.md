@@ -47,7 +47,7 @@ incidents; `shared/rules.py` keeps the equivalent stateless rules as a readable 
 shared/            engine-agnostic core: schemas, rules, incident_engine, stateful, latency,
                    enrichment, kafka, metrics_listener, pipeline, scenarios
 src/               streaming entrypoints: producer, rtm_consumer, microbatch_consumer
-resources/         DAB resources: jobs, schema + volumes, Kafka secret scope
+resources/         DAB resources: jobs, schema + volumes, Kafka secret scope, the app
 data/static/       enrichment CSVs (the fleet + thresholds)
 app/               Databricks App (FastAPI) — SignalNow Console, Business + Tech tabs
 tests/             pytest suite (local Spark, no cluster/Kafka)
@@ -104,6 +104,10 @@ databricks secrets put-secret <scope> sasl_jaas_config --profile <profile>
 
 Confirm the RTM query is truly in Real-Time Mode by checking the physical plan shows
 `RealTimeStreamScan` (not `MicroBatchScan`).
+
+The **console app deploys with the bundle** (mock data by default). To point it at live
+Kafka, set `USE_MOCK_BACKEND=false` and the `KAFKA_*` env in `app/app.yaml` (see
+[`docs/deploy-contract.md`](docs/deploy-contract.md) §5).
 
 ## The app and real data
 

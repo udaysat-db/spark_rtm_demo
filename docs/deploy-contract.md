@@ -107,14 +107,19 @@ Not credentials, but they block the run:
   the bundle; the deploy script uploads the enrichment CSVs to `static`. RTM checkpoints
   must be persistent (UC Volume, v2+ format).
 
-## 5. The app (only if the console is deployed as a Databricks App)
+## 5. The app (deployed with the bundle)
+
+The console is a Databricks App and a **bundle resource**
+(`resources/signalnow_console.app.yml`), so `databricks bundle deploy` creates it alongside
+the jobs, schema, volumes, and secret scope. Its env lives in `app/app.yaml`.
 
 | Mode | `USE_MOCK_BACKEND` | Needs |
 |---|---|---|
-| **Mock** (shipped) | `true` | nothing — fully demoable |
-| **Live** (Kafka-tailing, not built yet) | `false` | the app SP has `READ` on `signalnow_kafka`; `app.yaml` injects `KAFKA_BOOTSTRAP`, `KAFKA_TOPIC` (= `output_topic`), and the SASL secret via `valueFrom` |
+| **Mock** (default) | `true` | nothing — deploys fully demoable |
+| **Live** (tails Kafka via `KafkaDataSource`) | `false` | set the `KAFKA_*` env in `app/app.yaml` (bootstrap, topics, source mode); SASL creds via `valueFrom` from `${var.kafka_secret_scope}`; grant the app's service principal `READ` on that scope |
 
-There is **no `PGHOST/PGUSER/...`** — that was the removed Lakebase path.
+The store roster ships in the app (`app/fleet_roster.csv`) so the grid renders every store at
+rest. There is **no `PGHOST/PGUSER/...`** — that was the removed Lakebase path.
 
 ## Handoff checklist (what the infra repo provides)
 

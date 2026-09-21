@@ -1,0 +1,12 @@
+resources:
+  apps:
+    signalnow_console:
+      name: signalnow-console-${bundle.target}
+      description: "SignalNow RTM console — live cold-chain cockpit (tails Kafka alerts + metrics)."
+      # The whole app/ directory ships (FastAPI backend, static UI, fleet_roster.csv).
+      source_code_path: ../app
+      # Env lives in app/app.yaml, NOT here (Databricks Apps read env from the source
+      # app.yaml). It defaults to USE_MOCK_BACKEND=true, so the app deploys fully demoable
+      # with no Kafka wiring. To go live, set USE_MOCK_BACKEND=false and the KAFKA_* env in
+      # app/app.yaml (SASL creds via valueFrom from the ${var.kafka_secret_scope} scope) —
+      # see docs/deploy-contract.md §5. Grant the app's service principal READ on that scope.
