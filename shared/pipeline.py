@@ -16,6 +16,7 @@ def read_events(spark: SparkSession, bootstrap: str, secret_scope: str, topic: s
            .options(**kafka_options(bootstrap, secret_scope, spark))
            .option("subscribe", topic)
            .option("startingOffsets", "latest")
+           .option("failOnDataLoss", "false")         # survive retention/offset gaps
            .option("kafka.fetch.max.wait.ms", "50")   # low-latency polling
            .load())
     return raw.select(F.from_json(F.col("value").cast("string"), EVENT_SCHEMA).alias("e")).select("e.*")

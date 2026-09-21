@@ -21,6 +21,8 @@ resources:
               - "${var.events_per_second}"
               - "--scenario"
               - "${var.scenario}"
+              - "--rtm-trigger"
+              - "${var.rtm_trigger_interval}"
           job_cluster_key: rtm
           libraries:
             - whl: ../dist/*.whl
@@ -35,6 +37,7 @@ resources:
             spark_conf:
               spark.databricks.streaming.realTimeMode.enabled: "true"
               spark.sql.execution.sortBeforeRepartition: "false"
+              spark.sql.shuffle.partitions: "${var.shuffle_partitions}"
             # RTM also requires Photon OFF (do not set runtime_engine: PHOTON) and
             # spot OFF. Add cloud availability attrs (aws_attributes/azure_attributes:
             # ON_DEMAND) for your cloud at deploy time.

@@ -64,6 +64,7 @@ schema: signalnow_rtm
 spark_version: 18.1.x-scala2.13       # DBR 18.1+ (NOT 18.3 — Lakebase is gone)
 node_type_id: i3.2xlarge              # cloud-specific; Standard_E8ds_v5 on Azure
 rtm_workers: 2                        # worker vCPUs >= Σ partitions across stages (slot math)
+shuffle_partitions: 8                 # spark.sql.shuffle.partitions for the stateful shuffle (keep small for RTM)
 
 kafka_bootstrap_servers: pkc-abc12.us-east-1.aws.confluent.cloud:9092
 input_topic: freezer_sensor_events
@@ -75,13 +76,16 @@ kafka_secret_scope: signalnow_kafka
 
 events_per_second: 200
 scenario: normal                      # normal|door_open|compressor_failure|power_outage|fleet_hot_zone
-processing_time_interval: "5 seconds"
+processing_time_interval: "5 seconds" # micro-batch trigger
+rtm_trigger_interval: "5 minutes"     # RTM long-batch/checkpoint duration (trigger realTime); 1 min in dev
 ```
 
 **Slot-math note:** RTM runs all stages simultaneously and worker vCPUs must be ≥ the sum
 of partitions across stages. The pipeline is Kafka source (`kafka_topic_partitions`) →
-broadcast enrichment (no shuffle) → `transformWithState` (one shuffle,
-`spark.sql.shuffle.partitions`). Size `rtm_workers` × the node's vCPUs to cover both.
+broadcast enrichment (no shuffle) → `transformWithState` (one shuffle, sized by
+`shuffle_partitions`, set into `spark.sql.shuffle.partitions` on the cluster — default **8**,
+not Spark's 200). So size `rtm_workers` × the node's vCPUs to cover
+`kafka_topic_partitions + shuffle_partitions`.
 
 ## 3. Kafka secrets — Databricks secret scope
 

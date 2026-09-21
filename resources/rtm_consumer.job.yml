@@ -23,6 +23,8 @@ resources:
               - "rtm"
               - "--metrics-topic"
               - "${var.metrics_topic}"
+              - "--rtm-trigger"
+              - "${var.rtm_trigger_interval}"
           job_cluster_key: rtm
           libraries:
             - whl: ../dist/*.whl
@@ -37,4 +39,5 @@ resources:
             spark_conf:
               spark.databricks.streaming.realTimeMode.enabled: "true"
               spark.sql.execution.sortBeforeRepartition: "false"
+              spark.sql.shuffle.partitions: "${var.shuffle_partitions}"
             # Photon OFF, spot OFF. Add cloud availability attrs at deploy time.

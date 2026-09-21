@@ -26,6 +26,8 @@ def parse_args():
     p.add_argument("--source-mode", default="rtm")
     p.add_argument("--metrics-topic", default=None,
                    help="If set, relay per-batch pipeline metrics to this Kafka topic.")
+    p.add_argument("--rtm-trigger", default="5 minutes",
+                   help="RTM long-running batch / checkpoint duration (trigger realTime).")
     return p.parse_args()
 
 
@@ -46,7 +48,7 @@ def main():
              .option("topic", args.output_topic)
              .option("checkpointLocation", args.checkpoint)
              .outputMode("update")
-             .trigger(realTime="5 minutes")     # Real-Time Mode
+             .trigger(realTime=args.rtm_trigger)     # Real-Time Mode
              .start())
     query.awaitTermination()
 

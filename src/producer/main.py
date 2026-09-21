@@ -24,6 +24,8 @@ def parse_args():
     p.add_argument("--events-per-second", type=int, default=200)
     p.add_argument("--scenario", default="normal")
     p.add_argument("--num-partitions", type=int, default=4)
+    p.add_argument("--rtm-trigger", default="5 minutes",
+                   help="RTM long-running batch / checkpoint duration (trigger realTime).")
     return p.parse_args()
 
 
@@ -51,7 +53,7 @@ def main():
              .option("topic", args.topic)
              .option("checkpointLocation", args.checkpoint)
              .outputMode("update")
-             .trigger(realTime="5 minutes")     # Real-Time Mode
+             .trigger(realTime=args.rtm_trigger)     # Real-Time Mode
              .start())
     query.awaitTermination()
 

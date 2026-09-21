@@ -31,6 +31,9 @@ variables:
   rtm_workers:
     description: Fixed worker count. RTM slot math — worker vCPUs must be >= sum of partitions across stages.
     default: 2
+  shuffle_partitions:
+    description: spark.sql.shuffle.partitions for the stateful (transformWithState) shuffle — keep small so RTM slot math fits (worker vCPUs >= kafka_topic_partitions + shuffle_partitions).
+    default: 8
 
   # Kafka — bring your own; credentials live in the secret scope, not here.
   kafka_bootstrap_servers:
@@ -54,6 +57,9 @@ variables:
     default: normal
   processing_time_interval:
     default: "5 seconds"
+  rtm_trigger_interval:
+    description: RTM long-running batch / checkpoint duration — trigger(realTime=...). Keep >= 5 min in prod; drop to 1 min in dev to see metrics emit sooner.
+    default: "5 minutes"
 
 targets:
   dev:

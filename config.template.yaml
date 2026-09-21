@@ -17,6 +17,7 @@ schema: signalnow_rtm                       # created by the bundle
 spark_version: 18.1.x-scala2.13            # DBR 18.1+ (Kafka-only path; no Lakebase)
 node_type_id: <cloud-node-type>            # e.g. i3.2xlarge (AWS) / Standard_E8ds_v5 (Azure)
 rtm_workers: 2                              # fixed worker count; worker vCPUs >= sum of partitions across stages
+shuffle_partitions: 8                       # spark.sql.shuffle.partitions for the stateful shuffle — keep small for RTM slot math
 
 # --- Kafka (bring your own; reachable from the workspace) ---
 kafka_bootstrap_servers: <host:9092,host:9092>
@@ -33,5 +34,6 @@ kafka_secret_scope: signalnow_kafka
 events_per_second: 200
 scenario: normal                            # normal|door_open|compressor_failure|power_outage|fleet_hot_zone
 
-# --- Micro-batch consumer ---
-processing_time_interval: "5 seconds"
+# --- Triggers ---
+processing_time_interval: "5 seconds"       # micro-batch trigger interval
+rtm_trigger_interval: "5 minutes"           # RTM long-batch/checkpoint duration (trigger realTime); >=5 min in prod, 1 min in dev
