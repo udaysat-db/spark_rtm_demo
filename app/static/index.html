@@ -303,6 +303,7 @@
           <div class="bi-row"><span class="nm">sourceQueuingLatencyMs <span style="color:var(--muted)">· Kafka append → first read</span></span><span class="p50 mono" id="biQ50">–</span><span class="p99 mono" id="biQ99">–</span></div>
           <div class="bi-row"><span class="nm">e2eLatencyMs <span style="color:var(--muted)">· source append → processed</span></span><span class="p50 mono" id="biE50">–</span><span class="p99 mono" id="biE99">–</span></div>
         </div>
+        <p class="hint" id="biNote" hidden style="margin-top:8px">Emitted in Real-Time Mode only — switch to RTM to see these.</p>
         <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;padding-top:10px;margin-top:8px;border-top:1px solid var(--border)">
           <span class="nm" style="color:var(--text-2)">Consumer lag <span style="color:var(--muted)">· offset backpressure · behind latest</span></span>
           <span class="mono" id="tLag">–</span>
@@ -377,10 +378,14 @@
     $("evNow").textContent="now "+nf(t.evps)+" ev/s";
     const tot=t.buckets.reduce((a,b)=>a+b,0)||1, cols=["var(--good)","var(--accent)","var(--warning)","var(--critical)"];
     $("bstack").innerHTML=t.buckets.map((n,i)=>{const p=n/tot*100;return p<0.5?"":`<i style="flex-basis:${p}%;background:${cols[i]};color:${i===2?'#3a2b00':'#fff'}">${p>=9?Math.round(p)+"%":""}</i>`;}).join("");
-    const bi=t.builtins;
-    $("biProc50").textContent=fmtMs(bi.proc50);$("biProc99").textContent=fmtMs(bi.proc99);
-    $("biQ50").textContent=fmtMs(bi.q50);$("biQ99").textContent=fmtMs(bi.q99);
-    $("biE50").textContent=fmtMs(bi.e50);$("biE99").textContent=fmtMs(bi.e99);
+    // builtins is null in micro-batch mode (StreamingQueryProgress latencies are RTM-only);
+    // guard it — reading bi.* on null used to throw here and abort before the charts drew,
+    // freezing them on the previous (RTM) render.
+    const bi=t.builtins||{}, biv=x=> x==null?"–":fmtMs(x);
+    $("biProc50").textContent=biv(bi.proc50);$("biProc99").textContent=biv(bi.proc99);
+    $("biQ50").textContent=biv(bi.q50);$("biQ99").textContent=biv(bi.q99);
+    $("biE50").textContent=biv(bi.e50);$("biE99").textContent=biv(bi.e99);
+    $("biNote").hidden = !!t.builtins;
     drawLat(t.lat_series, snap.mode);
     drawEvents(t.ev_series);
   }
