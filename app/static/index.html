@@ -176,7 +176,7 @@
   .mini .l{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.03em;text-transform:uppercase;}
   .mini .v{font-size:22px;font-weight:600;margin:2px 0 6px;}
   .builtins{display:grid;grid-template-columns:1fr;gap:9px;}
-  .bi-row{display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:baseline;font-size:12.5px;padding:8px 0;border-bottom:1px solid var(--border);}
+  .bi-row{display:grid;grid-template-columns:1fr 64px 64px;gap:12px;align-items:baseline;font-size:12.5px;padding:8px 0;border-bottom:1px solid var(--border);}
   .bi-row:last-child{border-bottom:0;}
   .bi-row .nm{color:var(--text-2);} .bi-row .p50,.bi-row .p99{text-align:right;}
   .bi-head{color:var(--muted);font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;}
@@ -262,12 +262,6 @@
   </section>
 
   <section id="paneTech" role="tabpanel" aria-labelledby="tabTech" hidden>
-    <div class="kpis">
-      <div class="kpi accent"><span class="label">Records consumed</span><span class="val mono" id="volIn">0</span><span class="foot">this session</span></div>
-      <div class="kpi"><span class="label">Alerts emitted</span><span class="val mono" id="volOut">0</span><span class="foot">this session</span></div>
-      <div class="kpi"><span class="label">Consumer lag</span><span class="val mono" id="tLag">0</span><span class="foot">offset backpressure · behind latest</span></div>
-    </div>
-
     <div class="card" style="margin-bottom:16px;">
       <div class="card-head"><div><h2>Pipeline latency over time</h2><p class="hint" style="margin:2px 0 0">in-Kafka → alert queued (p50) · bands mark the business windows</p></div>
         <span class="chip mono" id="latNow" style="font-size:12px"></span></div>
@@ -308,6 +302,10 @@
           <div class="bi-row"><span class="nm">processingLatencyMs <span style="color:var(--muted)">· read-to-write in query</span></span><span class="p50 mono" id="biProc50">–</span><span class="p99 mono" id="biProc99">–</span></div>
           <div class="bi-row"><span class="nm">sourceQueuingLatencyMs <span style="color:var(--muted)">· Kafka append → first read</span></span><span class="p50 mono" id="biQ50">–</span><span class="p99 mono" id="biQ99">–</span></div>
           <div class="bi-row"><span class="nm">e2eLatencyMs <span style="color:var(--muted)">· source append → processed</span></span><span class="p50 mono" id="biE50">–</span><span class="p99 mono" id="biE99">–</span></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;padding-top:10px;margin-top:8px;border-top:1px solid var(--border)">
+          <span class="nm" style="color:var(--text-2)">Consumer lag <span style="color:var(--muted)">· offset backpressure · behind latest</span></span>
+          <span class="mono" id="tLag">–</span>
         </div>
       </div>
     </div>
@@ -372,7 +370,6 @@
   function renderTech(){
     const t=snap.tech;
     $("tLag").textContent=fmtMs(t.lag_ms);
-    $("volIn").textContent=nf(t.vol_in);$("volOut").textContent=nf(t.vol_out);
     const la=t.lat_a||{}, lb=t.lat_b||{};
     $("pcB50").textContent=fmtMs(lb.p50);$("pcB95").textContent=fmtMs(lb.p95);$("pcB99").textContent=fmtMs(lb.p99);
     $("pcA50").textContent=fmtMs(la.p50);$("pcA95").textContent=fmtMs(la.p95);$("pcA99").textContent=fmtMs(la.p99);
