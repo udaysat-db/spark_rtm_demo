@@ -23,9 +23,30 @@ from __future__ import annotations
 import csv
 import json
 import os
+import sys
 import threading
 
 from aggregator import FleetAggregator, _store_num
+
+# Scenarios the console can drive (mirrors shared/scenarios.SCENARIOS; the app ships
+# app/ only, so it can't import from shared/).
+SCENARIOS = ["normal", "door_open", "compressor_failure", "power_outage", "fleet_hot_zone"]
+
+
+def _control_dir_from_env():
+    """The append-only control DIRECTORY the console writes to drive the producer's
+    scenario live. KAFKA_CONTROL_PATH may arrive as a /Volumes path or a dotted UC
+    name (catalog.schema.volume) depending on how the volume resource binding injects
+    it — normalize to a /Volumes path. None → controls are disabled (no-op)."""
+    raw = (os.getenv("KAFKA_CONTROL_PATH") or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("/"):
+        return raw.rstrip("/")
+    parts = raw.split(".")
+    if len(parts) == 3:                       # catalog.schema.volume
+        return "/Volumes/" + "/".join(parts)
+    return raw.rstrip("/")
 
 
 def _load_roster(path):
@@ -75,12 +96,46 @@ class KafkaDataSource:
             default_roster if os.path.exists(default_roster) else None)
         self.agg = FleetAggregator(roster=_load_roster(roster_path))
         self._lock = threading.Lock()
+        self._control_dir = _control_dir_from_env()   # None → controls disabled
+        self._selected = None                          # last scenario the operator set
+        self._w = None                                 # lazy WorkspaceClient (app SP)
         t = threading.Thread(target=self._run, daemon=True)
         t.start()
 
     # ---- controls -------------------------------------------------------
+    def _write_control(self, scenario: str) -> bool:
+        """Append a new timestamped control file the producer reads each batch (latest
+        `ts` wins). APPEND-ONLY — never overwrite (the producer reads every second and
+        an overwrite races the read, killing its query). Written as the app SP via the
+        Files API; needs WRITE_VOLUME on the control volume (granted by the app resource
+        binding). Returns False (no-op) when controls aren't configured."""
+        if scenario not in SCENARIOS or not self._control_dir:
+            return False
+        try:
+            import io
+            import time
+            from databricks.sdk import WorkspaceClient
+            if self._w is None:
+                self._w = WorkspaceClient()
+            ts = int(time.time() * 1000)
+            payload = json.dumps({"scenario": scenario, "ts": ts}).encode("utf-8")
+            self._w.files.upload(f"{self._control_dir}/c_{ts}.json",
+                                 io.BytesIO(payload), overwrite=False)
+            with self._lock:
+                self._selected = scenario
+            return True
+        except Exception as e:  # never 500 the request over a control hiccup
+            print(f"[control] write scenario={scenario} failed: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
+            return False
+
     def set_burst(self, burst: bool) -> None:
-        pass  # real data reflects the live producer; no-op
+        # The burst button toggles the live producer between a dramatic incident
+        # scenario and calm — by writing the control file the producer tails.
+        self._write_control("compressor_failure" if burst else "normal")
+
+    def set_scenario(self, scenario: str) -> None:
+        self._write_control(scenario)
 
     def set_mode(self, mode: str) -> None:
         # Both engines are in the shared topics (tagged), so this just switches which
@@ -92,17 +147,29 @@ class KafkaDataSource:
     def _run(self):
         from kafka import KafkaConsumer  # imported here so the module loads without kafka installed
         consumer = KafkaConsumer(self.alerts_topic, self.metrics_topic, **_consumer_kwargs())
-        for msg in consumer:                       # times out every 1s, then loops
-            rec = msg.value
-            if not isinstance(rec, dict):
-                continue
-            with self._lock:
-                if msg.topic == self.alerts_topic:
-                    self.agg.ingest_alert(rec)
-                else:
-                    self.agg.ingest_metric(rec)
+        # `consumer_timeout_ms` makes the iterator raise StopIteration after an idle
+        # gap — it ENDS the `for`, it does not loop. Wrap it so an idle second just
+        # re-enters iteration instead of killing this daemon thread (the tail must
+        # run for the life of the app, and the topics are quiet between messages).
+        while True:
+            for msg in consumer:
+                rec = msg.value
+                if not isinstance(rec, dict):
+                    continue
+                with self._lock:
+                    if msg.topic == self.alerts_topic:
+                        self.agg.ingest_alert(rec)
+                    else:
+                        self.agg.ingest_metric(rec)
 
     # ---- snapshot -------------------------------------------------------
     def snapshot(self) -> dict:
         with self._lock:
-            return self.agg.snapshot(self.mode)
+            snap = self.agg.snapshot(self.mode)
+            sel = self._selected
+        # Reflect the operator's selection immediately; the alert-derived scenario_name
+        # catches up once the new scenario's incidents flow (~1-2 batches).
+        if sel:
+            snap["scenario_name"] = sel
+            snap["burst"] = sel != "normal"
+        return snap

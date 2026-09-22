@@ -76,6 +76,11 @@ class MockDataSource:
             if burst:
                 self.burst_start = time.time()
 
+    def set_scenario(self, scenario: str) -> None:
+        # Mock has no distinct per-scenario simulation; treat any incident scenario as
+        # a burst and "normal" as calm, so the same console control works in mock mode.
+        self.set_burst(scenario != "normal")
+
     def set_mode(self, mode: str) -> None:
         with self._lock:
             if mode in ("rtm", "mb"):

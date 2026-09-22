@@ -15,7 +15,7 @@ so that downstream `rules.business_logic` produces a believable alert mix:
   power_outage      units on battery/outage, low battery, warming
   fleet_hot_zone    a large share of units warming over their limit (burst)
 """
-from pyspark.sql import DataFrame
+from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 
 SCENARIOS = ["normal", "door_open", "compressor_failure", "power_outage", "fleet_hot_zone"]
@@ -30,35 +30,63 @@ _STRESS = {
 }
 
 
-def build_events(df: DataFrame, scenario: str) -> DataFrame:
+def _stress_fraction(sc: Column) -> Column:
+    """Map the scenario column to its stress fraction, entirely in SQL so it can be a
+    live, per-batch value (the control file) rather than a plan-time constant."""
+    expr = F.lit(_STRESS["normal"])
+    for name, frac in _STRESS.items():
+        if name == "normal":
+            continue
+        expr = F.when(sc == F.lit(name), F.lit(frac)).otherwise(expr)
+    return expr
+
+
+def build_events(df: DataFrame, scenario) -> DataFrame:
     """`df` must carry: freezer_id, site_id, freezer_type, temperature_upper_limit,
     door_open_limit_seconds, maintenance_priority, inventory_value_band.
-    Returns a DataFrame with the sensor-event columns (see schemas.EVENT_SCHEMA)."""
-    if scenario not in SCENARIOS:
-        raise ValueError(f"unknown scenario {scenario!r}; expected one of {SCENARIOS}")
-    p = _STRESS[scenario]
 
-    stressed = F.rand() < F.lit(p)
+    `scenario` may be a **string** (fixed, as before) or a **Column** (a live value,
+    e.g. from the control file joined in per batch) — everything below is expressed
+    in SQL so the shaping switches on the value at runtime, not at plan time. This is
+    what lets the console change the scenario without restarting the producer.
+    Returns a DataFrame with the sensor-event columns (see schemas.EVENT_SCHEMA)."""
+    if isinstance(scenario, str):
+        if scenario not in SCENARIOS:
+            raise ValueError(f"unknown scenario {scenario!r}; expected one of {SCENARIOS}")
+        sc = F.lit(scenario)
+    else:
+        sc = scenario  # a Column carrying the (live) scenario name per row
+
+    p = _stress_fraction(sc)
+    # Stress is decided PER FREEZER (deterministic on freezer_id), not per event: a unit
+    # that is "failing" for the scenario stays failed across ALL its readings, so its
+    # temperature/compressor breach is SUSTAINED — which is what the incident engine's
+    # EWMA + consecutive-reading gate needs to latch. Per-event randomness interleaves
+    # healthy readings and the EWMA never crosses the limit (no incidents ever fire).
+    # A higher scenario stress fraction crosses more freezers, monotonically, so
+    # switching normal → compressor_failure adds a wave of new incidents.
+    freezer_r = F.pmod(F.hash(F.col("freezer_id")), F.lit(10000)) / F.lit(10000.0)
+    stressed = freezer_r < p
     noise = (F.rand() - F.lit(0.5)) * F.lit(2.0)          # ±1.0 °C jitter
     upper = F.col("temperature_upper_limit")
     nominal = upper - F.lit(3.0)                           # healthy set point
 
-    warming = scenario in ("compressor_failure", "power_outage", "fleet_hot_zone")
+    warming = sc.isin("compressor_failure", "power_outage", "fleet_hot_zone")
     # temperature: healthy near nominal; stressed units climb over the limit
-    temperature_c = F.when(stressed & F.lit(warming), upper + F.rand() * F.lit(3.0)) \
-        .when(stressed & F.lit(scenario == "door_open"), upper - F.lit(1.0) + F.rand() * F.lit(2.0)) \
+    temperature_c = F.when(stressed & warming, upper + F.rand() * F.lit(3.0)) \
+        .when(stressed & (sc == F.lit("door_open")), upper - F.lit(1.0) + F.rand() * F.lit(2.0)) \
         .otherwise(nominal + noise)
 
-    door_open = stressed & F.lit(scenario in ("door_open", "fleet_hot_zone")) & (F.rand() < F.lit(0.8))
+    door_open = stressed & sc.isin("door_open", "fleet_hot_zone") & (F.rand() < F.lit(0.8))
     door_open_seconds = F.when(door_open, (F.col("door_open_limit_seconds") * (F.lit(1.2) + F.rand() * F.lit(1.5))).cast("int")) \
         .otherwise((F.rand() * F.lit(20)).cast("int"))
 
-    compressor_off = stressed & F.lit(scenario == "compressor_failure")
+    compressor_off = stressed & (sc == F.lit("compressor_failure"))
     compressor_on = ~compressor_off
     compressor_health = F.when(compressor_off, F.rand() * F.lit(0.45)) \
         .otherwise(F.lit(0.8) + F.rand() * F.lit(0.2))
 
-    on_power_event = stressed & F.lit(scenario == "power_outage")
+    on_power_event = stressed & (sc == F.lit("power_outage"))
     power_state = F.when(on_power_event, F.when(F.rand() < F.lit(0.5), F.lit("outage")).otherwise(F.lit("battery"))) \
         .otherwise(F.lit("normal"))
     battery_pct = F.when(on_power_event, F.rand() * F.lit(25.0)).otherwise(F.lit(100.0))
@@ -79,7 +107,7 @@ def build_events(df: DataFrame, scenario: str) -> DataFrame:
         F.round(battery_pct, 1).alias("battery_pct"),
         F.round(F.lit(20.0) + F.rand() * F.lit(8.0), 1).alias("ambient_temp_c"),
         (F.rand() < F.lit(0.05)).alias("defrost_cycle_active"),
-        F.lit(scenario).alias("scenario_name"),
+        sc.alias("scenario_name"),
         F.when(stressed, F.lit("elevated")).otherwise(F.lit("none")).alias("synthetic_severity"),
         F.expr("unix_millis(current_timestamp())").alias("producer_ts"),
     )

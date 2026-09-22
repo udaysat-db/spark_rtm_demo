@@ -20,9 +20,11 @@ resources:
               - "--events-per-second"
               - "${var.events_per_second}"
               - "--scenario"
-              - "${var.scenario}"
-              - "--rtm-trigger"
-              - "${var.rtm_trigger_interval}"
+              - "${var.scenario}"                  # fallback only; the control file wins
+              - "--control-path"
+              - "/Volumes/${var.catalog}/${resources.schemas.signalnow.name}/control"
+              - "--trigger-interval"
+              - "1 second"                         # micro-batch; also the live-control latency
           job_cluster_key: rtm
           libraries:
             - whl: ../dist/*.whl
@@ -35,9 +37,11 @@ resources:
             num_workers: ${var.rtm_workers}       # fixed size (no autoscale) — required by RTM
             data_security_mode: SINGLE_USER        # Dedicated access mode
             spark_conf:
-              spark.databricks.streaming.realTimeMode.enabled: "true"
-              spark.sql.execution.sortBeforeRepartition: "false"
+              # The producer is a plain MICRO-BATCH generator, not RTM (see
+              # src/producer/main.py) — RTM off so its control-file broadcast join is
+              # allowed. RTM is the consumers' job.
+              spark.databricks.streaming.realTimeMode.enabled: "false"
               spark.sql.shuffle.partitions: "${var.shuffle_partitions}"
-            # RTM requires Photon OFF (do not set runtime_engine: PHOTON) and spot OFF.
+            # Photon OFF (do not set runtime_engine: PHOTON) and spot OFF — kept for parity.
             aws_attributes:
               availability: ON_DEMAND   # Azure: use azure_attributes.availability: ON_DEMAND

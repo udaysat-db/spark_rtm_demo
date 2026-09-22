@@ -19,3 +19,14 @@ resources:
       name: checkpoints
       volume_type: MANAGED
       comment: Per-stream Structured Streaming checkpoints.
+
+    control:
+      catalog_name: ${var.catalog}
+      schema_name: ${var.schema}
+      name: control
+      volume_type: MANAGED
+      comment: >-
+        Live demo control (producer_control.json). The console (app SP) writes the
+        current scenario here; the producer re-reads it every batch (stream-static
+        join) to switch scenario WITHOUT a restart. Admin deployer grants the app SP
+        WRITE on this volume — see docs/deploy-contract.md §5.

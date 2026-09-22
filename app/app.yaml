@@ -1,25 +1,29 @@
 command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
 
 env:
-  # Mock data by default. Set to "false" to tail live Kafka (KafkaDataSource).
+  # Public-repo default is mock ("true"); this deployment runs live ("false").
   - name: USE_MOCK_BACKEND
-    value: "true"
+    value: "false"
 
-  # --- Live Kafka backend (used when USE_MOCK_BACKEND=false) ---
+  # --- Live Kafka backend ---
   # Generic, non-sensitive names — safe as literals in this public repo:
-  # - name: KAFKA_ALERTS_TOPIC
-  #   value: "freezer_alerts_enriched"
-  # - name: KAFKA_METRICS_TOPIC
-  #   value: "freezer_pipeline_metrics"
-  # - name: KAFKA_SOURCE_MODE
-  #   value: "rtm"                       # rtm | mb — engine shown first
-  # - name: KAFKA_SASL_MECHANISM
-  #   value: "SCRAM-SHA-512"             # PLAIN | SCRAM-SHA-512 (MSK SASL/SCRAM)
+  - name: KAFKA_ALERTS_TOPIC
+    value: "freezer_alerts_enriched"
+  - name: KAFKA_METRICS_TOPIC
+    value: "freezer_pipeline_metrics"
+  - name: KAFKA_SOURCE_MODE
+    value: "rtm"                       # rtm | mb — engine shown first
+  - name: KAFKA_SASL_MECHANISM
+    value: "SCRAM-SHA-512"             # PLAIN | SCRAM-SHA-512 (MSK SASL/SCRAM)
   # From the secret scope via valueFrom (never inline) — keeps the broker endpoint AND the
   # SASL credentials out of the committed repo. The feeder populates these scope keys (§3).
-  # - name: KAFKA_BOOTSTRAP
-  #   valueFrom: "kafka-bootstrap"
-  # - name: KAFKA_SASL_USERNAME
-  #   valueFrom: "kafka-sasl-username"
-  # - name: KAFKA_SASL_PASSWORD
-  #   valueFrom: "kafka-sasl-password"
+  - name: KAFKA_BOOTSTRAP
+    valueFrom: "kafka-bootstrap"
+  - name: KAFKA_SASL_USERNAME
+    valueFrom: "kafka-sasl-username"
+  - name: KAFKA_SASL_PASSWORD
+    valueFrom: "kafka-sasl-password"
+  # Live-control volume path (the console writes the producer's scenario here). From the
+  # uc_securable resource binding, so it resolves to the deployed (dev-prefixed) volume.
+  - name: KAFKA_CONTROL_PATH
+    valueFrom: "control-volume"

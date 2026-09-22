@@ -13,22 +13,32 @@ resources:
       # the bindings below and set the KAFKA_* env + valueFrom in app/app.yaml; the admin
       # deployer applying this grants the app SP READ (no feeder round-trip). Left commented so
       # the default mock deploy needs no secrets. See docs/deploy-contract.md §3 and §5.
-      # resources:
-      #   - name: kafka-bootstrap            # the key app/app.yaml references via valueFrom
-      #     description: "Kafka bootstrap servers for the live console"
-      #     secret:
-      #       scope: ${var.kafka_secret_scope}
-      #       key: kafka_bootstrap
-      #       permission: READ
-      #   - name: kafka-sasl-username
-      #     description: "Kafka SASL username for the live console"
-      #     secret:
-      #       scope: ${var.kafka_secret_scope}
-      #       key: sasl_username
-      #       permission: READ
-      #   - name: kafka-sasl-password
-      #     description: "Kafka SASL password for the live console"
-      #     secret:
-      #       scope: ${var.kafka_secret_scope}
-      #       key: sasl_password
-      #       permission: READ
+      resources:
+        - name: kafka-bootstrap            # the key app/app.yaml references via valueFrom
+          description: "Kafka bootstrap servers for the live console"
+          secret:
+            scope: ${var.kafka_secret_scope}
+            key: kafka_bootstrap
+            permission: READ
+        - name: kafka-sasl-username
+          description: "Kafka SASL username for the live console"
+          secret:
+            scope: ${var.kafka_secret_scope}
+            key: sasl_username
+            permission: READ
+        - name: kafka-sasl-password
+          description: "Kafka SASL password for the live console"
+          secret:
+            scope: ${var.kafka_secret_scope}
+            key: sasl_password
+            permission: READ
+        # Live control: the console writes the producer's scenario here (append-only).
+        # WRITE_VOLUME on the bundle-created control volume, granted to the app SP when
+        # the admin deployer applies this — no feeder round-trip. valueFrom hands the
+        # app the deployed (dev-prefixed) volume path. See docs/deploy-contract.md §5.
+        - name: control-volume
+          description: "Control volume the console writes to drive the live scenario"
+          uc_securable:
+            securable_type: VOLUME
+            securable_full_name: ${var.catalog}.${resources.schemas.signalnow.name}.control
+            permission: WRITE_VOLUME

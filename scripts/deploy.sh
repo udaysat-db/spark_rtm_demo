@@ -41,6 +41,20 @@ for f in data/static/*.csv; do
   databricks fs cp "$f" "dbfs:$STATIC/$(basename "$f")" --overwrite --profile "$PROFILE"
 done
 
+# Seed the live-control DIRECTORY the producer reads each batch. It is APPEND-ONLY —
+# the console (and this seed) write a NEW timestamped file each time; the producer
+# reads the whole dir and takes the latest by `ts`. Never overwrite a control file:
+# the producer reads it every second and an overwrite races the read (FAILED_READ_FILE
+# kills the query). Seed with the configured scenario at the current ts so a fresh
+# deploy sets the baseline; a later console write (higher ts) wins.
+CONTROL="/Volumes/$CATALOG/$SCHEMA_DEPLOYED/control"
+SCN="$(cfg scenario)"; [ -n "$SCN" ] || SCN="normal"
+TS="$(python3 -c 'import time;print(int(time.time()*1000))')"
+TMPCTL="$(mktemp)"; printf '{"scenario": "%s", "ts": %s}\n' "$SCN" "$TS" > "$TMPCTL"
+echo "==> seeding control $CONTROL/seed_$TS.json (scenario=$SCN, ts=$TS)"
+databricks fs cp "$TMPCTL" "dbfs:$CONTROL/seed_$TS.json" --overwrite --profile "$PROFILE"
+rm -f "$TMPCTL"
+
 cat <<EOF
 
 Deployed. Next:

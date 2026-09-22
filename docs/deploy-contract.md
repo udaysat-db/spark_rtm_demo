@@ -141,9 +141,10 @@ Not credentials, but they block the run:
   `StreamingQueryListener` write per-batch metrics here (real input rate, offset lag,
   trigger duration, and RTM latency percentiles). The app consumes it once `backend_kafka`
   lands; provision it now with the other topics.
-- **Volumes** — `/Volumes/<catalog>/<schema>/static` and `.../checkpoints` are created by
-  the bundle; the deploy script uploads the enrichment CSVs to `static`. RTM checkpoints
-  must be persistent (UC Volume, v2+ format).
+- **Volumes** — `/Volumes/<catalog>/<schema>/static`, `.../checkpoints`, and `.../control`
+  are created by the bundle; the deploy script uploads the enrichment CSVs to `static` and
+  seeds `control`. RTM checkpoints must be persistent (UC Volume, v2+ format). `control` holds
+  the append-only live-scenario files the console writes and the producer tails (§5).
 
 ## 5. The app (deployed with the bundle)
 
@@ -173,6 +174,16 @@ the broker endpoint and SASL creds from the scope, so nothing sensitive lands in
 
 The store roster ships in the app (`app/fleet_roster.csv`) so the grid renders every store at
 rest. There is **no `PGHOST/PGUSER/...`** — that was the removed Lakebase path.
+
+**Live control (console drives the scenario).** The console's scenario selector + burst button
+change the *live producer's* scenario with **no restart or redeploy**: the app writes an
+append-only JSON file to the bundle-created **`control` volume**, and the producer (a
+micro-batch job) re-reads that directory every batch (stream-static join, latest `ts` wins).
+This needs the app SP to have `WRITE_VOLUME` on `control` — granted by the **`control-volume`
+`uc_securable` binding** already in [`signalnow_console.app.yml`](../resources/signalnow_console.app.yml),
+applied by the admin deployer (no feeder round-trip). The binding also hands the app the deployed
+volume path via `valueFrom` (`KAFKA_CONTROL_PATH`). Never overwrite a control file — the producer
+reads it every second and an overwrite races the read; only ever append new timestamped files.
 
 ## 6. Feeding a session (assistant / automation)
 

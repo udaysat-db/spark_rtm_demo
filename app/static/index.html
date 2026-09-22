@@ -207,6 +207,13 @@
         <button id="pfMb" aria-pressed="false">Micro-batch</button>
       </div>
       <span class="chip clock mono" id="clock">00:00</span>
+      <select class="chip" id="scnSel" title="Drive the live scenario" aria-label="Scenario">
+        <option value="normal">Normal</option>
+        <option value="door_open">Door open</option>
+        <option value="compressor_failure">Compressor failure</option>
+        <option value="power_outage">Power outage</option>
+        <option value="fleet_hot_zone">Fleet hot zone</option>
+      </select>
       <button class="btn danger" id="burstBtn">⚡ Inject burst</button>
       <button class="btn icon-btn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
     </div>
@@ -337,6 +344,8 @@
     $("engineName").textContent=snap.engine;
     $("scnName").textContent=snap.scenario_name;
     $("scnChip").dataset.burst=snap.burst?"1":"0";
+    { const ss=$("scnSel"), opts=[...ss.options].map(o=>o.value);
+      if(snap.scenario_name && opts.includes(snap.scenario_name) && ss.value!==snap.scenario_name) ss.value=snap.scenario_name; }
     $("pfRtm").setAttribute("aria-pressed", snap.mode==="rtm");
     $("pfMb").setAttribute("aria-pressed", snap.mode==="mb");
     const bb=$("burstBtn"); bb.textContent=snap.burst?"● Return to normal":"⚡ Inject burst";
@@ -421,6 +430,7 @@
 
   async function post(url){ try{ await fetch(url,{method:"POST"}); }catch(e){} }
   $("burstBtn").onclick=async()=>{ const on=!(snap&&snap.burst); await post("/api/controls/burst?on="+on); poll(); };
+  $("scnSel").onchange=async(e)=>{ await post("/api/controls/scenario?scenario="+encodeURIComponent(e.target.value)); poll(); };
   $("pfRtm").onclick=async()=>{ await post("/api/controls/mode?mode=rtm"); poll(); };
   $("pfMb").onclick=async()=>{ await post("/api/controls/mode?mode=mb"); poll(); };
   $("themeBtn").onclick=()=>{ const r=document.documentElement;
@@ -432,10 +442,9 @@
     isMock=h.mock;
     $("note").textContent = isMock
       ? "Mock data · controls simulate the stream. Set USE_MOCK_BACKEND=false to tail live alerts from Kafka."
-      : "Live · tailing alerts from Kafka.";
-    // Real data: the RTM/Micro-batch toggle still works (both engines are in the shared
-    // topic, tagged), so keep it; only the simulated burst control is mock-only.
-    if(!isMock){ $("burstBtn").style.display="none"; }
+      : "Live · tailing alerts from Kafka. Scenario controls drive the real producer.";
+    // Live mode: the scenario selector + burst button write the producer's control file
+    // (it re-reads every batch), so they drive real data — keep them visible.
   }).catch(()=>{});
 
   poll();

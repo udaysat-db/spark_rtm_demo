@@ -3,3 +3,6 @@ uvicorn[standard]
 # Live Kafka backend (KafkaDataSource, USE_MOCK_BACKEND=false) — pure-Python client,
 # no build deps; supports SASL_SSL + PLAIN/SCRAM (Amazon MSK SASL/SCRAM).
 kafka-python
+# Live control: the console writes the producer's scenario to the control volume via
+# the Files API as the app SP (pre-installed on Apps, pinned here for certainty).
+databricks-sdk
