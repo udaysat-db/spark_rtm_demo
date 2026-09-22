@@ -118,7 +118,10 @@ class FleetAggregator:
                 "sev": sev, "status": SEV_STATUS.get(sev, 1), "open": True,
                 "site": rec.get("site_name") or "", "store": _store_num(rec),
                 "ts": now_ms, "typ": typ,
-                "lat_ms": round(float(lat)) if lat is not None else None,
+                # Per-alert stamp latency is only valid for micro-batch; in RTM it's
+                # negative (batch-fixed current_timestamp), so drop negatives here and
+                # substitute RTM's real aggregate in the feed (see snapshot).
+                "lat_ms": round(float(lat)) if (lat is not None and float(lat) >= 0) else None,
                 "incident_id": rec.get("incident_id"),
             }
 
@@ -191,9 +194,13 @@ class FleetAggregator:
         open_by_type = {}
         for _, u in open_units:
             open_by_type[u["typ"]] = open_by_type.get(u["typ"], 0) + 1
+        # In RTM the per-alert stamp latency is invalid, so show RTM's real measured e2e
+        # p50 (from builtins) on feed rows; micro-batch keeps its per-alert value.
+        rtm_feed_lat = round(rtm_lat[0]) if rtm_lat else None
         feed = [{
             "label": TYPE_LABEL.get(u["typ"], u["typ"]), "severity": u["sev"],
-            "site": u["site"], "device": fid, "lat_ms": u.get("lat_ms"),
+            "site": u["site"], "device": fid,
+            "lat_ms": rtm_feed_lat if rtm_lat else u.get("lat_ms"),
             "ts": u["ts"] / 1000.0, "lifecycle": "OPEN",
             "ago_s": max(0, round(now_ms / 1000.0 - u["ts"] / 1000.0)),
         } for fid, u in sorted(open_units, key=lambda kv: -kv[1]["ts"])[:FEED_LEN]]
