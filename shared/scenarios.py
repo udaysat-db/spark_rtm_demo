@@ -20,14 +20,21 @@ from pyspark.sql import functions as F
 
 SCENARIOS = ["normal", "door_open", "compressor_failure", "power_outage", "fleet_hot_zone"]
 
-# fraction of units "stressed" for the scenario's characteristic failure
+# Fraction of units affected at any moment for each scenario's characteristic failure.
+# Kept to a realistic slice (fleet_hot_zone is the deliberately dramatic one) so the
+# fleet grid reads mostly-healthy with a moving scatter of alerts, not a solid block.
 _STRESS = {
-    "normal": 0.02,
-    "door_open": 0.45,
-    "compressor_failure": 0.30,
-    "power_outage": 0.30,
-    "fleet_hot_zone": 0.65,
+    "normal": 0.03,
+    "door_open": 0.18,
+    "compressor_failure": 0.15,
+    "power_outage": 0.15,
+    "fleet_hot_zone": 0.40,
 }
+
+# Each freezer re-rolls its "affected" status on its own staggered window of this length,
+# so the affected SET churns over time (units fail and recover) while still staying put
+# long enough (>> the incident sustained-gate) for an incident to latch.
+_BUCKET_MS = 120_000
 
 
 def _stress_fraction(sc: Column) -> Column:
@@ -58,42 +65,62 @@ def build_events(df: DataFrame, scenario) -> DataFrame:
         sc = scenario  # a Column carrying the (live) scenario name per row
 
     p = _stress_fraction(sc)
-    # Stress is decided PER FREEZER (deterministic on freezer_id), not per event: a unit
-    # that is "failing" for the scenario stays failed across ALL its readings, so its
-    # temperature/compressor breach is SUSTAINED — which is what the incident engine's
-    # EWMA + consecutive-reading gate needs to latch. Per-event randomness interleaves
-    # healthy readings and the EWMA never crosses the limit (no incidents ever fire).
-    # A higher scenario stress fraction crosses more freezers, monotonically, so
-    # switching normal → compressor_failure adds a wave of new incidents.
-    freezer_r = F.pmod(F.hash(F.col("freezer_id")), F.lit(10000)) / F.lit(10000.0)
-    stressed = freezer_r < p
-    noise = (F.rand() - F.lit(0.5)) * F.lit(2.0)          # ±1.0 °C jitter
+    # WHICH freezers are affected CHURNS over time: each freezer re-rolls `r` on its own
+    # staggered ~_BUCKET_MS window (offset by its hash), so the affected set moves
+    # continuously instead of being a fixed block — the fleet grid actually changes. `r`
+    # is stable within a window (so breaches SUSTAIN and the engine latches), and its
+    # position in [0, p) sets a per-unit INTENSITY (mild → severe) so incident severity
+    # SPREADS: most affected units just warm (→ warning), only the worst trip the
+    # scenario's hard signal (compressor off / power outage → serious/critical).
+    now_ms = F.expr("unix_millis(current_timestamp())")
+    bucket = F.floor(
+        (now_ms + F.pmod(F.hash(F.col("freezer_id"), F.lit(9)), F.lit(_BUCKET_MS)))
+        / F.lit(float(_BUCKET_MS)))
+    r = F.pmod(F.hash(F.col("freezer_id"), bucket), F.lit(10000)) / F.lit(10000.0)
+    stressed = r < p
+    frac = F.when(p > F.lit(0.0), (p - r) / p).otherwise(F.lit(0.0))   # 0 (mild) … 1 (severe)
+    intensity = frac * frac                                            # skew toward mild
+    hard = stressed & (intensity > F.lit(0.72))    # only the worst ~15% trip the hard signal
+
+    noise = (F.rand() - F.lit(0.5)) * F.lit(1.0)          # ±0.5 °C jitter
     upper = F.col("temperature_upper_limit")
     nominal = upper - F.lit(3.0)                           # healthy set point
+    dlimit = F.col("door_open_limit_seconds")
 
     warming = sc.isin("compressor_failure", "power_outage", "fleet_hot_zone")
-    # temperature: healthy near nominal; stressed units climb over the limit
-    temperature_c = F.when(stressed & warming, upper + F.rand() * F.lit(3.0)) \
-        .when(stressed & (sc == F.lit("door_open")), upper - F.lit(1.0) + F.rand() * F.lit(2.0)) \
+    door_scn = sc.isin("door_open", "fleet_hot_zone")
+
+    # Temperature: affected warming units climb over the limit by an amount scaled by
+    # intensity — mild ≈ just over (TEMP_HIGH warning), only the severe tail ≥ +2 °C
+    # (critical). Gentle ramp so most sit in the warning band.
+    over = intensity * F.lit(2.6) - F.lit(0.2)
+    temperature_c = F.when(stressed & warming, upper + over) \
+        .when(stressed & door_scn, upper - F.lit(1.0) + intensity * F.lit(1.5)) \
         .otherwise(nominal + noise)
 
-    door_open = stressed & sc.isin("door_open", "fleet_hot_zone") & (F.rand() < F.lit(0.8))
-    door_open_seconds = F.when(door_open, (F.col("door_open_limit_seconds") * (F.lit(1.2) + F.rand() * F.lit(1.5))).cast("int")) \
-        .otherwise((F.rand() * F.lit(20)).cast("int"))
+    # Door held open; seconds scale with intensity (mild < 2×limit → warning, severe > 2× → critical).
+    door_open = stressed & door_scn
+    door_open_seconds = F.when(door_open, (dlimit * (F.lit(1.0) + intensity * F.lit(2.4))).cast("int")) \
+        .otherwise((F.rand() * F.lit(15)).cast("int"))
 
-    compressor_off = stressed & (sc == F.lit("compressor_failure"))
+    # Compressor cuts out only for the worst compressor_failure units (→ COMPRESSOR
+    # serious/critical); milder ones keep running but degraded and surface as warnings.
+    compressor_off = hard & (sc == F.lit("compressor_failure"))
     compressor_on = ~compressor_off
-    compressor_health = F.when(compressor_off, F.rand() * F.lit(0.45)) \
-        .otherwise(F.lit(0.8) + F.rand() * F.lit(0.2))
+    compressor_health = F.when(compressor_off, F.rand() * F.lit(0.4)) \
+        .when(stressed & (sc == F.lit("compressor_failure")), F.lit(0.55) + F.rand() * F.lit(0.2)) \
+        .otherwise(F.lit(0.85) + F.rand() * F.lit(0.15))
 
-    on_power_event = stressed & (sc == F.lit("power_outage"))
+    # Power failure (outage + low battery) only for the worst power_outage units
+    # (→ POWER critical); milder ones just warm.
+    on_power_event = hard & (sc == F.lit("power_outage"))
     power_state = F.when(on_power_event, F.when(F.rand() < F.lit(0.5), F.lit("outage")).otherwise(F.lit("battery"))) \
         .otherwise(F.lit("normal"))
-    battery_pct = F.when(on_power_event, F.rand() * F.lit(25.0)).otherwise(F.lit(100.0))
+    battery_pct = F.when(on_power_event, F.rand() * F.lit(20.0)).otherwise(F.lit(100.0))
 
     return df.select(
         F.expr("uuid()").alias("event_id"),
-        F.expr("unix_millis(current_timestamp())").alias("event_ts"),
+        now_ms.alias("event_ts"),
         F.col("freezer_id").alias("device_id"),
         F.col("freezer_id"),
         F.col("site_id"),
@@ -109,5 +136,5 @@ def build_events(df: DataFrame, scenario) -> DataFrame:
         (F.rand() < F.lit(0.05)).alias("defrost_cycle_active"),
         sc.alias("scenario_name"),
         F.when(stressed, F.lit("elevated")).otherwise(F.lit("none")).alias("synthetic_severity"),
-        F.expr("unix_millis(current_timestamp())").alias("producer_ts"),
+        now_ms.alias("producer_ts"),
     )
