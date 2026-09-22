@@ -226,7 +226,7 @@
 
   <section id="paneBusiness" role="tabpanel" aria-labelledby="tabBusiness">
     <div class="kpis">
-      <div class="kpi"><span class="label">Units monitored</span><span class="val mono">25,000</span><span class="foot">across 2,000 stores</span></div>
+      <div class="kpi"><span class="label">Units monitored</span><span class="val mono" id="kUnits">—</span><span class="foot" id="kStores">across — stores</span></div>
       <div class="kpi crit"><span class="label">Units in alert</span><span class="val mono" id="kUnitsAlert">0</span><span class="foot">live</span></div>
       <div class="kpi"><span class="label">Alerts detected</span><span class="val mono" id="kAlerts">0</span><span class="foot">this session</span></div>
       <div class="kpi crit"><span class="label">Critical alerts</span><span class="val mono" id="kCrit">0</span><span class="foot">this session</span></div>
@@ -354,6 +354,8 @@
   }
   function renderBiz(){
     const b=snap.business;
+    $("kUnits").textContent=nf(b.units_monitored);
+    $("kStores").textContent="across "+nf(b.stores_total ?? b.cells.length)+" stores";
     $("kUnitsAlert").textContent=nf(b.units_in_alert);
     $("kAlerts").textContent=nf(b.alerts);
     $("kCrit").textContent=nf(b.critical);

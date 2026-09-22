@@ -99,6 +99,13 @@ class KafkaDataSource:
         self._control_dir = _control_dir_from_env()   # None → controls disabled
         self._selected = None                          # last scenario the operator set
         self._w = None                                 # lazy WorkspaceClient (app SP)
+        # Fleet size for the "units monitored" KPI. The aggregator only knows freezers
+        # it has SEEN in alerts, which understates the fleet; FLEET_UNITS (from app.yaml)
+        # is the real total. Stores come from the roster (len of cells).
+        try:
+            self._fleet_units = int(os.getenv("FLEET_UNITS", "")) or None
+        except ValueError:
+            self._fleet_units = None
         t = threading.Thread(target=self._run, daemon=True)
         t.start()
 
@@ -172,4 +179,6 @@ class KafkaDataSource:
         if sel:
             snap["scenario_name"] = sel
             snap["burst"] = sel != "normal"
+        if self._fleet_units:
+            snap["business"]["units_monitored"] = self._fleet_units
         return snap

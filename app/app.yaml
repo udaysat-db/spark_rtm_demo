@@ -13,6 +13,8 @@ env:
     value: "freezer_pipeline_metrics"
   - name: KAFKA_SOURCE_MODE
     value: "rtm"                       # rtm | mb — engine shown first
+  - name: FLEET_UNITS
+    value: "500"                       # total freezers monitored (matches gen_fleet default; stores come from the roster)
   - name: KAFKA_SASL_MECHANISM
     value: "SCRAM-SHA-512"             # PLAIN | SCRAM-SHA-512 (MSK SASL/SCRAM)
   # From the secret scope via valueFrom (never inline) — keeps the broker endpoint AND the

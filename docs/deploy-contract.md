@@ -178,7 +178,9 @@ rest. There is **no `PGHOST/PGUSER/...`** — that was the removed Lakebase path
 **Live control (console drives the scenario).** The console's scenario selector + burst button
 change the *live producer's* scenario with **no restart or redeploy**: the app writes an
 append-only JSON file to the bundle-created **`control` volume**, and the producer (a
-micro-batch job) re-reads that directory every batch (stream-static join, latest `ts` wins).
+micro-batch job) re-reads that directory fresh every batch in `foreachBatch` (latest `ts`
+wins) — a stream-static join caches the file listing at query start and never sees files
+added later, so the read must be re-issued per batch.
 This needs the app SP to have `WRITE_VOLUME` on `control` — granted by the **`control-volume`
 `uc_securable` binding** already in [`signalnow_console.app.yml`](../resources/signalnow_console.app.yml),
 applied by the admin deployer (no feeder round-trip). The binding also hands the app the deployed
