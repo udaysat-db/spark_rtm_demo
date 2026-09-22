@@ -141,6 +141,11 @@ Not credentials, but they block the run:
   `StreamingQueryListener` write per-batch metrics here (real input rate, offset lag,
   trigger duration, and RTM latency percentiles). The app consumes it once `backend_kafka`
   lands; provision it now with the other topics.
+  - **Set `input_topic` and `output_topic` to `message.timestamp.type = LogAppendTime`.**
+    The console derives the business latency in-app from Kafka record timestamps
+    (alert-queued − in-Kafka, "latency B"); LogAppendTime makes both ends the MSK broker's
+    clock, so B is skew-free. With the Kafka default (`CreateTime`) B still works but is
+    subject to producer↔consumer cluster clock skew.
 - **Volumes** — `/Volumes/<catalog>/<schema>/static`, `.../checkpoints`, and `.../control`
   are created by the bundle; the deploy script uploads the enrichment CSVs to `static` and
   seeds `control`. RTM checkpoints must be persistent (UC Volume, v2+ format). `control` holds

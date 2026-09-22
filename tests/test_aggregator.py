@@ -15,11 +15,13 @@ T = 1_000_000  # base now_ms
 
 
 def alert(**over):
+    # event_ts / input_kafka_ts are the latency START references; the app computes
+    # latency = alert_kafka_ts (passed to ingest_alert) − start. Defaults put both at T.
     rec = dict(
         source_mode="rtm", freezer_id="FZ-0142-01", site_id="S0142",
         site_name="Store 0142 Austin TX", alert_type="TEMP_HIGH", alert_severity="warning",
-        lifecycle_event="OPENED", end_to_end_latency_ms=120, within_250ms=True,
-        within_1s=True, within_5s=True, incident_id="FZ-0142-01:1", scenario_name="normal",
+        lifecycle_event="OPENED", event_ts=T, input_kafka_ts=T,
+        incident_id="FZ-0142-01:1", scenario_name="normal",
     )
     rec.update(over)
     return rec
@@ -76,19 +78,23 @@ def test_critical_is_deduped_by_incident_id():
 
 def test_fresh_pct_from_within_250ms():
     agg = FleetAggregator()
-    agg.ingest_alert(alert(within_250ms=True, incident_id="a"), now_ms=T)
-    agg.ingest_alert(alert(freezer_id="FZ-2", within_250ms=False, incident_id="b"), now_ms=T)
+    # Freshness is judged on B latency = alert_kafka_ts − input_kafka_ts; <=250ms is fresh.
+    agg.ingest_alert(alert(input_kafka_ts=T - 100, incident_id="a"), now_ms=T, alert_kafka_ts=T)
+    agg.ingest_alert(alert(freezer_id="FZ-2", input_kafka_ts=T - 500, incident_id="b"),
+                     now_ms=T, alert_kafka_ts=T)
     assert agg.snapshot("rtm", now_ms=T)["business"]["fresh_pct"] == 50.0
 
 
 def test_latency_percentiles_and_buckets():
     agg = FleetAggregator()
+    # B latency per alert = alert_kafka_ts − input_kafka_ts.
     for i, lat in enumerate([100, 300, 2000, 8000]):
         agg.ingest_alert(alert(freezer_id=f"FZ-{i}", incident_id=f"i{i}",
-                               end_to_end_latency_ms=lat), now_ms=T)
+                               input_kafka_ts=T - lat), now_ms=T, alert_kafka_ts=T)
     tech = agg.snapshot("rtm", now_ms=T)["tech"]
     assert tech["max"] == 8000
-    assert tech["buckets"] == [1, 1, 1, 1]   # <=250, <=1000, <=5000, >5000
+    assert tech["buckets"] == [1, 1, 1, 1]     # <=250, <=1000, <=5000, >5000
+    assert tech["lat_b"]["p50"] == 2000        # headline p50 = B
 
 
 def test_cells_use_roster_and_worst_severity():
@@ -131,5 +137,6 @@ def test_snapshot_shape_matches_contract():
                       "business", "tech"}
     assert set(s["business"]) == {"units_monitored", "units_in_alert", "alerts", "critical",
                                   "fresh_pct", "cells", "top_sites", "by_type", "by_severity", "feed"}
-    assert set(s["tech"]) == {"evps", "alps", "p50", "p95", "p99", "max", "lag_ms", "vol_in",
-                              "vol_out", "lat_series", "ev_series", "al_series", "buckets", "builtins"}
+    assert set(s["tech"]) == {"evps", "alps", "p50", "p95", "p99", "max", "lat_a", "lat_b",
+                              "lag_ms", "vol_in", "vol_out", "lat_series", "ev_series",
+                              "al_series", "buckets", "builtins"}

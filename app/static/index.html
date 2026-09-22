@@ -271,19 +271,25 @@
     </div>
 
     <div class="card" style="margin-bottom:16px;">
-      <div class="card-head"><div><h2>End-to-end latency over time</h2><p class="hint" style="margin:2px 0 0">event → alert emitted · bands mark the business windows</p></div>
+      <div class="card-head"><div><h2>Pipeline latency over time</h2><p class="hint" style="margin:2px 0 0">in-Kafka → alert queued (p50) · bands mark the business windows</p></div>
         <span class="chip mono" id="latNow" style="font-size:12px"></span></div>
       <div class="chart-wrap"><svg id="latChart" viewBox="0 0 1000 300" preserveAspectRatio="none" role="img" aria-label="Latency over time"></svg></div>
     </div>
 
     <div class="grid-2b" style="margin-bottom:16px;">
       <div class="card">
-        <h2>Latency percentiles</h2><p class="hint">recent window</p>
+        <h2>Latency percentiles</h2><p class="hint">recent window · business logic (event/Kafka → alert queued)</p>
+        <div class="l" style="margin:2px 0 4px;font-weight:600">In-Kafka → alert <span style="color:var(--muted);font-weight:400">· pipeline (broker clock)</span></div>
         <div class="pcts">
-          <div class="pct"><div class="l">p50</div><div class="v mono" id="pc50">–</div></div>
-          <div class="pct"><div class="l">p95</div><div class="v mono" id="pc95">–</div></div>
-          <div class="pct"><div class="l">p99</div><div class="v mono" id="pc99">–</div></div>
-          <div class="pct"><div class="l">max</div><div class="v mono" id="pcMax">–</div></div>
+          <div class="pct"><div class="l">p50</div><div class="v mono" id="pcB50">–</div></div>
+          <div class="pct"><div class="l">p95</div><div class="v mono" id="pcB95">–</div></div>
+          <div class="pct"><div class="l">p99</div><div class="v mono" id="pcB99">–</div></div>
+        </div>
+        <div class="l" style="margin:12px 0 4px;font-weight:600">Event → alert <span style="color:var(--muted);font-weight:400">· end-to-end</span></div>
+        <div class="pcts">
+          <div class="pct"><div class="l">p50</div><div class="v mono" id="pcA50">–</div></div>
+          <div class="pct"><div class="l">p95</div><div class="v mono" id="pcA95">–</div></div>
+          <div class="pct"><div class="l">p99</div><div class="v mono" id="pcA99">–</div></div>
         </div>
         <h2 style="margin-top:18px">Business-window split</h2><p class="hint">share of alerts by freshness</p>
         <div class="bstack" id="bstack"></div>
@@ -379,7 +385,9 @@
     const t=snap.tech;
     $("tEvps").textContent=nf(t.evps); $("tAlps").textContent=nf(t.alps);
     $("tP50").textContent=fmtMs(t.p50); $("tP99").textContent=fmtMs(t.p99); $("tLag").textContent=fmtMs(t.lag_ms);
-    $("pc50").textContent=fmtMs(t.p50);$("pc95").textContent=fmtMs(t.p95);$("pc99").textContent=fmtMs(t.p99);$("pcMax").textContent=fmtMs(t.max);
+    const la=t.lat_a||{}, lb=t.lat_b||{};
+    $("pcB50").textContent=fmtMs(lb.p50);$("pcB95").textContent=fmtMs(lb.p95);$("pcB99").textContent=fmtMs(lb.p99);
+    $("pcA50").textContent=fmtMs(la.p50);$("pcA95").textContent=fmtMs(la.p95);$("pcA99").textContent=fmtMs(la.p99);
     $("latNow").textContent="now "+fmtMs(t.lat_series.length?t.lat_series[t.lat_series.length-1]:0);
     $("thEv").textContent=nf(t.evps);$("thAl").textContent=nf(t.alps);
     $("volIn").textContent=nf(t.vol_in);$("volOut").textContent=nf(t.vol_out);
@@ -394,7 +402,7 @@
   }
   function drawLat(d, mode){
     const W=1000,H=300,padL=52,padR=12,padT=12,padB=22;
-    const yMax = mode==="rtm"?400:10000, iw=W-padL-padR, ih=H-padT-padB;
+    const yMax = mode==="rtm"?1000:10000, iw=W-padL-padR, ih=H-padT-padB;
     const yof=v=>padT+ih-Math.min(v,yMax)/yMax*ih;
     const bands=[[0,250,"var(--band-250)"],[250,1000,"var(--band-1s)"],[1000,5000,"var(--band-5s)"],[5000,yMax,"var(--band-stale)"]];
     let s="";

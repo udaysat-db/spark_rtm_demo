@@ -31,7 +31,15 @@ def add_latency_fields(df: DataFrame, source_mode: str, now_ms: Optional[int] = 
     for name, sql_type in INCIDENT_COLUMNS:
         if name not in df.columns:
             df = df.withColumn(name, F.lit(None).cast(sql_type))
+    # input_kafka_ts rides through the stateful path (read_events → enriched_schema);
+    # null-fill it for the stateless reference path so the output shape is identical.
+    if "input_kafka_ts" not in df.columns:
+        df = df.withColumn("input_kafka_ts", F.lit(None).cast("long"))
 
+    # NOTE: these emit-time / end_to_end_latency_ms fields use current_timestamp(), which
+    # is batch-fixed in RTM and therefore NOT a valid latency there. They are kept only
+    # for schema continuity; the console computes real latency in the app from the alert's
+    # Kafka timestamp minus event_ts (A) / input_kafka_ts (B). See app/aggregator.py.
     emit = F.lit(now_ms).cast("long") if now_ms is not None else F.expr("unix_millis(current_timestamp())")
     latency = emit - F.col("producer_ts")
     return (

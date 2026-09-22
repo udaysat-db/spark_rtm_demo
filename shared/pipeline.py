@@ -19,7 +19,13 @@ def read_events(spark: SparkSession, bootstrap: str, secret_scope: str, topic: s
            .option("failOnDataLoss", "false")         # survive retention/offset gaps
            .option("kafka.fetch.max.wait.ms", "50")   # low-latency polling
            .load())
-    return raw.select(F.from_json(F.col("value").cast("string"), EVENT_SCHEMA).alias("e")).select("e.*")
+    # Keep the Kafka record's append timestamp (input_kafka_ts) alongside the parsed
+    # event. With the topic on LogAppendTime this is the MSK broker's clock; the app
+    # uses it as latency start B (in-Kafka -> alert-Kafka), and event_ts as start A.
+    return (raw
+            .select(F.from_json(F.col("value").cast("string"), EVENT_SCHEMA).alias("e"),
+                    F.col("timestamp").alias("kts"))
+            .select("e.*", F.expr("unix_millis(kts)").alias("input_kafka_ts")))
 
 
 def alerts_stream(events: DataFrame, fleet: DataFrame, source_mode: str) -> DataFrame:

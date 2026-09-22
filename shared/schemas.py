@@ -55,8 +55,15 @@ ENRICHMENT_SCHEMA = StructType([
 
 
 def enriched_schema() -> StructType:
-    """Event schema + enrichment columns — the input `business_logic` expects."""
-    return StructType(EVENT_SCHEMA.fields + ENRICHMENT_SCHEMA.fields)
+    """Event schema + `input_kafka_ts` (broker append time on the input topic, added by
+    read_events) + enrichment columns — the input `business_logic`/engine expect. The
+    engine passes every reading field through to the alert (dict(ctx)), so carrying
+    input_kafka_ts here lets the app compute the in-Kafka -> alert-Kafka latency (B)."""
+    return StructType(
+        EVENT_SCHEMA.fields
+        + [StructField("input_kafka_ts", LongType(), True)]
+        + ENRICHMENT_SCHEMA.fields
+    )
 
 
 # Columns written to Kafka `freezer_alerts_enriched` (the only sink). All consumers
@@ -68,6 +75,7 @@ ALERT_OUTPUT_COLUMNS = [
     "source_mode",
     "event_ts",
     "producer_ts",
+    "input_kafka_ts",          # broker append ts on the input topic; app latency start B
     "processing_start_ts",
     "alert_emit_ts",
     "end_to_end_latency_ms",

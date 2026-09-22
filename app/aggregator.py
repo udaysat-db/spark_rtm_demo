@@ -55,10 +55,7 @@ class _ModeState:
         self.by_type = {k: 0 for k, _ in TYPES}
         self.by_sev = {"warning": 0, "serious": 0, "critical": 0}
         self.critical_ids = set()           # incident_ids that reached critical (dedup)
-        self.fresh_hits = 0
-        self.fresh_total = 0
         self.site_hits = defaultdict(int)   # site_name → opened count
-        self.lat_win = deque()              # (ts, latency_ms) within LAT_WINDOW
         self.alert_ts = deque()             # opened-event timestamps (for alps)
         self.feed = deque(maxlen=FEED_LEN)
         # freezer_id → {"sev","status","site","store","ts","open"}
@@ -88,7 +85,7 @@ class FleetAggregator:
         self.t0 = time.time()
 
     # ---- ingest ---------------------------------------------------------
-    def ingest_alert(self, rec: dict, now_ms=None) -> None:
+    def ingest_alert(self, rec: dict, now_ms=None, alert_kafka_ts=None) -> None:
         now_ms = now_ms or _now_ms()
         mode = _app_mode(rec.get("source_mode", "rtm"))
         st = self.modes[mode]
@@ -100,9 +97,19 @@ class FleetAggregator:
         st.vol_out += 1
         st.scenario_name = rec.get("scenario_name") or st.scenario_name
 
-        lat = rec.get("end_to_end_latency_ms")
-        if lat is not None:
-            st.lat_win.append((now_ms, float(lat)))
+        # Latency = alert's Kafka ts (ending) − a carried start (no current_timestamp).
+        #   A = alert_kafka_ts − event_ts        (event → alert; cross-clock, fuller)
+        #   B = alert_kafka_ts − input_kafka_ts  (in-Kafka → alert; broker-clock, clean)
+        # DETECTION metric: measure only on fresh OPENED/ESCALATED events. HEARTBEAT
+        # keep-alives re-emit a stale reading every ~20s and would inflate latency.
+        # Negatives (missing/odd clocks) are dropped rather than shown.
+        lat_a = lat_b = None
+        if alert_kafka_ts and lifecycle in _OPENING:
+            ev, ik = rec.get("event_ts"), rec.get("input_kafka_ts")
+            if ev is not None and alert_kafka_ts - ev >= 0:
+                lat_a = float(alert_kafka_ts - ev)
+            if ik is not None and alert_kafka_ts - ik >= 0:
+                lat_b = float(alert_kafka_ts - ik)
 
         if lifecycle == "RESOLVED":
             u = st.units.get(fid)
@@ -110,32 +117,29 @@ class FleetAggregator:
                 u["open"] = False
                 u["ts"] = now_ms
         else:  # OPENED / ESCALATED / HEARTBEAT — the unit is (still) in alert. Store
-               # everything the feed and by-type views need, so those are rebuilt each
-               # snapshot from the CURRENT open set (below) rather than from a one-shot
-               # OPENED event. That keeps them correct across app restarts, when we only
-               # ever see an already-open unit's HEARTBEATs, not its original OPENED.
+               # everything the feed, by-type and latency views need, so those are rebuilt
+               # each snapshot from the CURRENT open set (below) rather than from one-shot
+               # events. That keeps them correct across app restarts, when we only ever
+               # see an already-open unit's HEARTBEATs, not its original OPENED.
+            prev = st.units.get(fid) or {}
             st.units[fid] = {
                 "sev": sev, "status": SEV_STATUS.get(sev, 1), "open": True,
                 "site": rec.get("site_name") or "", "store": _store_num(rec),
                 "ts": now_ms, "typ": typ,
-                # Per-alert stamp latency is only valid for micro-batch; in RTM it's
-                # negative (batch-fixed current_timestamp), so drop negatives here and
-                # substitute RTM's real aggregate in the feed (see snapshot).
-                "lat_ms": round(float(lat)) if (lat is not None and float(lat) >= 0) else None,
+                # Detection latency at OPEN (A and B), preserved across HEARTBEATs (lat is
+                # None then) so it reflects how fast the incident was FIRST detected.
+                "lat_a": lat_a if lat_a is not None else prev.get("lat_a"),
+                "lat_b": lat_b if lat_b is not None else prev.get("lat_b"),
                 "incident_id": rec.get("incident_id"),
             }
 
-        # Cumulative session KPIs (total alerts, freshness, sites) count genuine fresh
-        # opens only; the current-state views (units_in_alert/by_type/feed) come from
-        # st.units at snapshot time.
+        # Cumulative session KPIs (total alerts, sites) count genuine fresh opens only;
+        # current-state views (units_in_alert/by_type/feed/latency) come from st.units.
         if lifecycle == "OPENED":
             st.alerts += 1
             st.by_sev[sev] = st.by_sev.get(sev, 0) + 1
             st.site_hits[rec.get("site_name") or ""] += 1
             st.alert_ts.append(now_ms)
-            st.fresh_total += 1
-            if rec.get("within_250ms"):
-                st.fresh_hits += 1
         if lifecycle in _OPENING and sev == "critical":
             st.critical_ids.add(rec.get("incident_id") or f"{fid}:{now_ms}")
 
@@ -165,42 +169,36 @@ class FleetAggregator:
         mode = "mb" if mode in ("mb", "microbatch") else "rtm"
         st = self.modes[mode]
         self._evict(st, now_ms)
-        self._advance_series(st, now_ms)
 
-        lats = [v for _, v in st.lat_win]
-        rtm_lat = _rtm_lat(st.builtins) if mode == "rtm" else None
-        if rtm_lat:
-            # RTM: use the engine's own per-row latency percentiles (the alert-stamp
-            # latency is invalid in RTM — batch-fixed clock). Estimate buckets and the
-            # %-within-250ms from the percentile CDF.
-            p50, p95, p99 = rtm_lat
-            pmax = p99
-            cdf = sorted([(50.0, p50), (95.0, p95), (99.0, p99)])
-            c250, c1s, c5s = _frac_within(250, cdf), _frac_within(1000, cdf), _frac_within(5000, cdf)
-            buckets = [round(c250), round(c1s - c250), round(c5s - c1s), round(100 - c5s)]
-            fresh_pct_rtm = c250
-        else:
-            p50, p95, p99 = _pct(lats, 50), _pct(lats, 95), _pct(lats, 99)
-            pmax = max(lats) if lats else 0
-            buckets = [0, 0, 0, 0]
-            for v in lats:
-                buckets[0 if v <= 250 else 1 if v <= 1000 else 2 if v <= 5000 else 3] += 1
-            fresh_pct_rtm = None
-
-        # Current open incidents drive units_in_alert, by_type and the feed, so they
-        # reflect reality regardless of when this app process started.
+        # Current open incidents drive everything — units_in_alert, by_type, feed, AND the
+        # latency percentiles — so they reflect the live fleet regardless of when this app
+        # process started (a fresh window would sit empty once the fleet is stably open).
         open_units = [(fid, u) for fid, u in st.units.items() if u["open"]]
         units_in_alert = len(open_units)
         open_by_type = {}
         for _, u in open_units:
             open_by_type[u["typ"]] = open_by_type.get(u["typ"], 0) + 1
-        # In RTM the per-alert stamp latency is invalid, so show RTM's real measured e2e
-        # p50 (from builtins) on feed rows; micro-batch keeps its per-alert value.
-        rtm_feed_lat = round(rtm_lat[0]) if rtm_lat else None
+
+        # Business latency = detection latency of currently-open incidents. Two views:
+        #   B (in-Kafka → alert): clean single-clock pipeline latency — the headline.
+        #   A (event → alert): fuller, cross-clock — shown alongside.
+        # Spark internals stay in their own "Real-Time Mode metrics" panel (builtins).
+        lats_a = [u["lat_a"] for _, u in open_units if u.get("lat_a") is not None]
+        lats_b = [u["lat_b"] for _, u in open_units if u.get("lat_b") is not None]
+        pa = (_pct(lats_a, 50), _pct(lats_a, 95), _pct(lats_a, 99))
+        pb = (_pct(lats_b, 50), _pct(lats_b, 95), _pct(lats_b, 99))
+        p50, p95, p99 = pb
+        pmax = max(lats_b) if lats_b else 0
+        buckets = [0, 0, 0, 0]
+        for v in lats_b:
+            buckets[0 if v <= 250 else 1 if v <= 1000 else 2 if v <= 5000 else 3] += 1
+        fresh_pct = (sum(1 for v in lats_b if v <= 250) / len(lats_b) * 100) if lats_b else 0.0
+        self._advance_series(st, now_ms, pb[0])
+
         feed = [{
             "label": TYPE_LABEL.get(u["typ"], u["typ"]), "severity": u["sev"],
             "site": u["site"], "device": fid,
-            "lat_ms": rtm_feed_lat if rtm_lat else u.get("lat_ms"),
+            "lat_ms": round(u["lat_b"]) if u.get("lat_b") is not None else None,   # B
             "ts": u["ts"] / 1000.0, "lifecycle": "OPEN",
             "ago_s": max(0, round(now_ms / 1000.0 - u["ts"] / 1000.0)),
         } for fid, u in sorted(open_units, key=lambda kv: -kv[1]["ts"])[:FEED_LEN]]
@@ -218,8 +216,7 @@ class FleetAggregator:
                 "units_in_alert": units_in_alert,
                 "alerts": st.alerts,
                 "critical": len(st.critical_ids),
-                "fresh_pct": fresh_pct_rtm if fresh_pct_rtm is not None
-                             else ((st.fresh_hits / st.fresh_total * 100) if st.fresh_total else 0.0),
+                "fresh_pct": fresh_pct,
                 "cells": self._cells(st),
                 "top_sites": [list(t) for t in top],
                 "by_type": [{"key": k, "label": lbl, "n": open_by_type.get(k, 0)} for k, lbl in TYPES],
@@ -229,6 +226,9 @@ class FleetAggregator:
             "tech": {
                 "evps": st.evps, "alps": self._alps(st, now_ms),
                 "p50": p50, "p95": p95, "p99": p99, "max": pmax,
+                # Two business-latency views (see snapshot): A = event→alert, B = in-Kafka→alert.
+                "lat_a": {"p50": pa[0], "p95": pa[1], "p99": pa[2]},
+                "lat_b": {"p50": pb[0], "p95": pb[1], "p99": pb[2]},
                 "lag_ms": st.lag_ms,
                 "vol_in": st.vol_in, "vol_out": st.vol_out,
                 "lat_series": list(st.lat_series), "ev_series": list(st.ev_series),
@@ -239,9 +239,6 @@ class FleetAggregator:
 
     # ---- helpers --------------------------------------------------------
     def _evict(self, st, now_ms):
-        cutoff = now_ms - LAT_WINDOW_MS
-        while st.lat_win and st.lat_win[0][0] < cutoff:
-            st.lat_win.popleft()
         acut = now_ms - ACTIVE_MS
         while st.alert_ts and st.alert_ts[0] < acut:
             st.alert_ts.popleft()
@@ -254,17 +251,12 @@ class FleetAggregator:
         recent = [t for t in st.alert_ts if t >= now_ms - 5000]
         return round(len(recent) / 5.0, 1)
 
-    def _advance_series(self, st, now_ms):
+    def _advance_series(self, st, now_ms, latb_p50):
         sec = now_ms // 1000
         if sec == st._last_series_s:
             return
         st._last_series_s = sec
-        rtm_lat = _rtm_lat(st.builtins)
-        if rtm_lat:                       # RTM: plot the engine's real e2e p50
-            st.lat_series.append(rtm_lat[0])
-        else:
-            lats = [v for _, v in st.lat_win]
-            st.lat_series.append(_pct(lats, 50) if lats else 0.0)
+        st.lat_series.append(latb_p50)           # B (in-Kafka → alert) p50 over time
         st.ev_series.append(st.evps)
         st.al_series.append(self._alps(st, now_ms))
 
@@ -284,30 +276,3 @@ def _pct(sorted_or_not, p):
         return 0.0
     a = sorted(sorted_or_not)
     return a[min(len(a) - 1, int(p / 100 * len(a)))]
-
-
-def _rtm_lat(builtins):
-    """RTM end-to-end latency percentiles (p50, p95, p99) from the StreamingQuery
-    listener's builtins, or None if unavailable. This is RTM's OWN per-row latency
-    measurement — the correct source for RTM mode (the alert-stamp latency uses the
-    consumer's current_timestamp(), which in RTM is fixed at the long batch's start,
-    so rows produced later in the batch get a nonsensical negative stamp)."""
-    if not builtins or builtins.get("e50") is None:
-        return None
-    e50 = float(builtins["e50"])
-    e99 = float(builtins["e99"]) if builtins.get("e99") is not None else e50
-    e95 = float(builtins["e95"]) if builtins.get("e95") is not None else e50 + (e99 - e50) * 45.0 / 49.0
-    return e50, e95, e99
-
-
-def _frac_within(threshold, pts):
-    """Estimate the fraction (0-100) of samples <= threshold from ascending
-    (percentile, value) points, via piecewise-linear interpolation of the CDF."""
-    prev_p, prev_v = 0.0, 0.0
-    for pct, val in pts:
-        if threshold <= val:
-            if val <= prev_v:
-                return prev_p
-            return round(prev_p + (pct - prev_p) * (threshold - prev_v) / (val - prev_v), 1)
-        prev_p, prev_v = float(pct), float(val)
-    return 100.0

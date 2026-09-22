@@ -165,7 +165,10 @@ class KafkaDataSource:
                     continue
                 with self._lock:
                     if msg.topic == self.alerts_topic:
-                        self.agg.ingest_alert(rec)
+                        # msg.timestamp is the alert record's Kafka timestamp (epoch ms)
+                        # — the latency ENDING point (alert queued). The app computes
+                        # latency from it, not from a pipeline current_timestamp() stamp.
+                        self.agg.ingest_alert(rec, alert_kafka_ts=msg.timestamp)
                     else:
                         self.agg.ingest_metric(rec)
 
