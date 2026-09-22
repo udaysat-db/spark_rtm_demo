@@ -263,8 +263,8 @@
 
   <section id="paneTech" role="tabpanel" aria-labelledby="tabTech" hidden>
     <div class="kpis">
-      <div class="kpi accent"><span class="label">Input rate</span><span class="val mono"><span id="tEvps">0</span> <small>ev/s</small></span><span class="foot">consumed from Kafka</span></div>
-      <div class="kpi"><span class="label">Output rate</span><span class="val mono"><span id="tAlps">0</span> <small>al/s</small></span><span class="foot">alerts emitted</span></div>
+      <div class="kpi accent"><span class="label">Records consumed</span><span class="val mono" id="volIn">0</span><span class="foot">this session</span></div>
+      <div class="kpi"><span class="label">Alerts emitted</span><span class="val mono" id="volOut">0</span><span class="foot">this session</span></div>
       <div class="kpi"><span class="label">Consumer lag</span><span class="val mono" id="tLag">0</span><span class="foot">offset backpressure · behind latest</span></div>
     </div>
 
@@ -272,6 +272,9 @@
       <div class="card-head"><div><h2>Pipeline latency over time</h2><p class="hint" style="margin:2px 0 0">in-Kafka → alert queued (p50) · bands mark the business windows</p></div>
         <span class="chip mono" id="latNow" style="font-size:12px"></span></div>
       <div class="chart-wrap"><svg id="latChart" viewBox="0 0 1000 300" preserveAspectRatio="none" role="img" aria-label="Latency over time"></svg></div>
+      <div class="card-head" style="margin-top:12px"><div><h2>Throughput over time</h2><p class="hint" style="margin:2px 0 0">events/sec consumed · same time window (read stacked against latency above)</p></div>
+        <span class="chip mono" id="evNow" style="font-size:12px"></span></div>
+      <div class="chart-wrap"><svg id="evChart" viewBox="0 0 1000 130" preserveAspectRatio="none" role="img" aria-label="Events per second over time"></svg></div>
     </div>
 
     <div class="grid-2b" style="margin-bottom:16px;">
@@ -299,26 +302,13 @@
         </div>
       </div>
       <div class="card">
-        <h2>Throughput</h2><p class="hint">per second, last 60 s</p>
-        <div class="mini">
-          <div><div class="l">Events in</div><div class="v mono" id="thEv">0</div><div class="chart-wrap"><svg id="spkEv" viewBox="0 0 300 70" preserveAspectRatio="none" aria-hidden="true"></svg></div></div>
-          <div><div class="l">Alerts out</div><div class="v mono" id="thAl">0</div><div class="chart-wrap"><svg id="spkAl" viewBox="0 0 300 70" preserveAspectRatio="none" aria-hidden="true"></svg></div></div>
+        <h2>Real-Time Mode metrics</h2><p class="hint">Spark internals · built-in StreamingQueryProgress latencies</p>
+        <div class="builtins">
+          <div class="bi-row"><span class="nm"></span><span class="p50 bi-head">p50</span><span class="p99 bi-head">p99</span></div>
+          <div class="bi-row"><span class="nm">processingLatencyMs <span style="color:var(--muted)">· read-to-write in query</span></span><span class="p50 mono" id="biProc50">–</span><span class="p99 mono" id="biProc99">–</span></div>
+          <div class="bi-row"><span class="nm">sourceQueuingLatencyMs <span style="color:var(--muted)">· Kafka append → first read</span></span><span class="p50 mono" id="biQ50">–</span><span class="p99 mono" id="biQ99">–</span></div>
+          <div class="bi-row"><span class="nm">e2eLatencyMs <span style="color:var(--muted)">· source append → processed</span></span><span class="p50 mono" id="biE50">–</span><span class="p99 mono" id="biE99">–</span></div>
         </div>
-        <h2 style="margin-top:18px">Volume · this session</h2>
-        <div class="mini" style="margin-top:10px">
-          <div><div class="l">Records consumed</div><div class="v mono" id="volIn">0</div></div>
-          <div><div class="l">Alerts emitted</div><div class="v mono" id="volOut">0</div></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Real-Time Mode metrics</h2><p class="hint">Spark internals · built-in StreamingQueryProgress latencies</p>
-      <div class="builtins">
-        <div class="bi-row"><span class="nm"></span><span class="p50 bi-head">p50</span><span class="p99 bi-head">p99</span></div>
-        <div class="bi-row"><span class="nm">processingLatencyMs <span style="color:var(--muted)">· read-to-write in query</span></span><span class="p50 mono" id="biProc50">–</span><span class="p99 mono" id="biProc99">–</span></div>
-        <div class="bi-row"><span class="nm">sourceQueuingLatencyMs <span style="color:var(--muted)">· Kafka append → first read</span></span><span class="p50 mono" id="biQ50">–</span><span class="p99 mono" id="biQ99">–</span></div>
-        <div class="bi-row"><span class="nm">e2eLatencyMs <span style="color:var(--muted)">· source append → processed</span></span><span class="p50 mono" id="biE50">–</span><span class="p99 mono" id="biE99">–</span></div>
       </div>
     </div>
   </section>
@@ -381,14 +371,13 @@
   }
   function renderTech(){
     const t=snap.tech;
-    $("tEvps").textContent=nf(t.evps); $("tAlps").textContent=nf(t.alps);
     $("tLag").textContent=fmtMs(t.lag_ms);
+    $("volIn").textContent=nf(t.vol_in);$("volOut").textContent=nf(t.vol_out);
     const la=t.lat_a||{}, lb=t.lat_b||{};
     $("pcB50").textContent=fmtMs(lb.p50);$("pcB95").textContent=fmtMs(lb.p95);$("pcB99").textContent=fmtMs(lb.p99);
     $("pcA50").textContent=fmtMs(la.p50);$("pcA95").textContent=fmtMs(la.p95);$("pcA99").textContent=fmtMs(la.p99);
     $("latNow").textContent="now "+fmtMs(t.lat_series.length?t.lat_series[t.lat_series.length-1]:0);
-    $("thEv").textContent=nf(t.evps);$("thAl").textContent=nf(t.alps);
-    $("volIn").textContent=nf(t.vol_in);$("volOut").textContent=nf(t.vol_out);
+    $("evNow").textContent="now "+nf(t.evps)+" ev/s";
     const tot=t.buckets.reduce((a,b)=>a+b,0)||1, cols=["var(--good)","var(--accent)","var(--warning)","var(--critical)"];
     $("bstack").innerHTML=t.buckets.map((n,i)=>{const p=n/tot*100;return p<0.5?"":`<i style="flex-basis:${p}%;background:${cols[i]};color:${i===2?'#3a2b00':'#fff'}">${p>=9?Math.round(p)+"%":""}</i>`;}).join("");
     const bi=t.builtins;
@@ -396,7 +385,24 @@
     $("biQ50").textContent=fmtMs(bi.q50);$("biQ99").textContent=fmtMs(bi.q99);
     $("biE50").textContent=fmtMs(bi.e50);$("biE99").textContent=fmtMs(bi.e99);
     drawLat(t.lat_series, snap.mode);
-    spark("spkEv",t.ev_series,"var(--accent)"); spark("spkAl",t.al_series,"var(--c2)");
+    drawEvents(t.ev_series);
+  }
+  // Events/sec over time — its OWN y-axis, stacked under the latency chart and sharing
+  // the exact x layout (same W/padL) so the two align tick-for-tick. NOT a dual axis.
+  function drawEvents(d){
+    const W=1000,H=130,padL=52,padR=12,padT=10,padB=18, iw=W-padL-padR, ih=H-padT-padB;
+    const svg=$("evChart"); if(!svg) return;
+    if(!d||d.length<2){ svg.innerHTML=""; return; }
+    const yMax=Math.max(10,...d), yof=v=>padT+ih-v/yMax*ih, step=iw/(d.length-1);
+    let s=`<line x1="${padL}" y1="${yof(yMax).toFixed(1)}" x2="${W-padR}" y2="${yof(yMax).toFixed(1)}" stroke="var(--grid)" stroke-width="1"/>`;
+    s+=`<text class="axis-lbl" x="${padL-6}" y="${(yof(yMax)+3).toFixed(1)}" text-anchor="end">${Math.round(yMax)}</text>`;
+    s+=`<text class="axis-lbl" x="${padL-6}" y="${(yof(0)+3).toFixed(1)}" text-anchor="end">0</text>`;
+    let path=""; d.forEach((v,i)=>{ path+=(i?"L":"M")+(padL+i*step).toFixed(1)+" "+yof(v).toFixed(1)+" "; });
+    s+=`<path d="${path}L ${(padL+(d.length-1)*step).toFixed(1)} ${padT+ih} L ${padL} ${padT+ih} Z" fill="var(--c2)" opacity="0.14"/>`;
+    s+=`<path d="${path}" fill="none" stroke="var(--c2)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const lx=padL+(d.length-1)*step, ly=yof(d[d.length-1]);
+    s+=`<circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="4.5" fill="var(--c2)" stroke="var(--surface)" stroke-width="2"/>`;
+    svg.innerHTML=s;
   }
   function drawLat(d, mode){
     const W=1000,H=300,padL=52,padR=12,padT=12,padB=22;
@@ -417,18 +423,6 @@
     }
     $("latChart").innerHTML=s;
   }
-  function spark(id,d,color){
-    const W=300,H=70,p=6, svg=$(id); if(!d||!d.length){svg.innerHTML="";return;}
-    const mx=Math.max(1,...d),iw=W-p*2,ih=H-p*2,step=iw/Math.max(1,d.length-1);
-    const yof=v=>p+ih-v/mx*ih; let path="";
-    d.forEach((v,i)=>{path+=(i?"L":"M")+(p+i*step).toFixed(1)+" "+yof(v).toFixed(1)+" ";});
-    let s=`<path d="${path}L ${(p+(d.length-1)*step).toFixed(1)} ${H-p} L ${p} ${H-p} Z" fill="${color}" opacity="0.14"/>`;
-    s+=`<path d="${path}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
-    const lx=p+(d.length-1)*step,ly=yof(d[d.length-1]);
-    s+=`<circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="3" fill="${color}"/>`;
-    svg.innerHTML=s;
-  }
-
   function setTab(t){ activeTab=t; const b=t==="business";
     $("tabBusiness").setAttribute("aria-selected",b);$("tabTech").setAttribute("aria-selected",!b);
     $("paneBusiness").hidden=!b; $("paneTech").hidden=b; render();
