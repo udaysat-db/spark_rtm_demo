@@ -22,11 +22,27 @@ Record fields (JSON value; key = source_mode):
 from __future__ import annotations
 
 import json
+import sys
 import time
 
 from pyspark.sql.streaming import StreamingQueryListener
 
 from shared.kafka_io import kafka_options
+
+# On Databricks the spark-sql-kafka connector is SHADED — the Kafka client classes
+# (and the SCRAM LoginModule named in sasl.jaas.config) live under `kafkashaded.`.
+# The driver-side producer must use the SAME namespace or the class isn't found and
+# the sasl.jaas.config LoginModule won't resolve. Try shaded first, fall back to a
+# vanilla kafka-clients on the classpath (local / non-Databricks). "" = no prefix.
+_KAFKA_PREFIXES = ("kafkashaded.", "")
+
+
+def _jvm_class(jvm, fqcn: str):
+    """Resolve a fully-qualified JVM class through py4j by walking the dotted name."""
+    obj = jvm
+    for part in fqcn.split("."):
+        obj = getattr(obj, part)
+    return obj
 
 # Reference list of the record fields (for the app-side consumer / docs).
 METRICS_RECORD_FIELDS = [
@@ -79,6 +95,8 @@ class MetricsListener(StreamingQueryListener):
             for k, v in kafka_options(bootstrap, secret_scope, spark).items()
         }
         self._producer = None
+        self._prefix = None      # resolved Kafka-client namespace (see _KAFKA_PREFIXES)
+        self._warned = False     # surface the first publish failure once, then stay quiet
 
     # -- lifecycle ---------------------------------------------------------
     def onQueryStarted(self, event):
@@ -87,8 +105,11 @@ class MetricsListener(StreamingQueryListener):
     def onQueryProgress(self, event):
         try:
             self._publish(self._build(event.progress))
-        except Exception:
-            pass  # a metrics hiccup must never take down the query
+        except Exception as e:   # a metrics hiccup must never take down the query
+            if not self._warned:
+                self._warned = True
+                print(f"[MetricsListener] publish failed; metrics disabled for this "
+                      f"query: {type(e).__name__}: {e}", file=sys.stderr)
 
     def onQueryIdle(self, event):        # newer PySpark; harmless if never called
         pass
@@ -134,20 +155,32 @@ class MetricsListener(StreamingQueryListener):
         if self._producer is not None:
             return self._producer
         jvm = self._spark._jvm
-        props = jvm.java.util.Properties()
-        ser = "org.apache.kafka.common.serialization.StringSerializer"
-        props.put("key.serializer", ser)
-        props.put("value.serializer", ser)
-        for k, v in self._props.items():
-            props.put(k, str(v))
-        self._producer = jvm.org.apache.kafka.clients.producer.KafkaProducer(props)
-        return self._producer
+        errors = []
+        for pfx in _KAFKA_PREFIXES:
+            try:
+                props = jvm.java.util.Properties()
+                # The serializer class name must match the producer's (shaded) namespace,
+                # since the producer loads it by reflection with its own classloader.
+                ser = pfx + "org.apache.kafka.common.serialization.StringSerializer"
+                props.put("key.serializer", ser)
+                props.put("value.serializer", ser)
+                for k, v in self._props.items():
+                    props.put(k, str(v))
+                cls = _jvm_class(jvm, pfx + "org.apache.kafka.clients.producer.KafkaProducer")
+                self._producer = cls(props)
+                self._prefix = pfx
+                return self._producer
+            except Exception as e:  # noqa: BLE001 — try the next namespace
+                errors.append(f"{pfx or '(vanilla)'} {type(e).__name__}: {e}")
+        raise RuntimeError("could not construct a Kafka producer; tried "
+                           + " | ".join(errors))
 
     def _publish(self, record: dict) -> None:
         jvm = self._spark._jvm
         producer = self._get_producer()
-        rec = jvm.org.apache.kafka.clients.producer.ProducerRecord(
-            self._topic, self._source_mode, json.dumps(record))
+        pr_cls = _jvm_class(
+            jvm, self._prefix + "org.apache.kafka.clients.producer.ProducerRecord")
+        rec = pr_cls(self._topic, self._source_mode, json.dumps(record))
         producer.send(rec)
 
     def _close(self) -> None:

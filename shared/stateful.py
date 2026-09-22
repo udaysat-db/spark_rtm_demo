@@ -54,17 +54,26 @@ INCIDENT_OUTPUT_SCHEMA = StructType(enriched_schema().fields + _INCIDENT_FIELDS)
 _STATE_SCHEMA = StructType([StructField("json", StringType(), True)])
 
 
+# Row FACTORIES with explicit field names, in schema order. A bare `Row(*values)` is
+# positional and carries NO field names, so when the transformWithState serializer does
+# `row.asDict(True)` on an emitted row it raises "Cannot convert Row into dict". Naming
+# the fields (and the nested temp_trend struct's) makes asDict work while keeping the
+# positional, schema-ordered construction (no Row(**kwargs) alphabetizing).
+_OUT_ROW = Row(*[f.name for f in INCIDENT_OUTPUT_SCHEMA.fields])
+_TREND_ROW = Row("ts", "temp")
+
+
 def _emit_to_row(emit: dict) -> Row:
-    """Build an output Row positionally, in INCIDENT_OUTPUT_SCHEMA field order, so
-    it never depends on Row(**kwargs) alphabetizing field names."""
+    """Build an output Row in INCIDENT_OUTPUT_SCHEMA field order, with named fields so
+    the Arrow serializer can convert it (and its nested temp_trend structs)."""
     values = []
     for f in INCIDENT_OUTPUT_SCHEMA.fields:
         if f.name == "temp_trend":
             trend = emit.get("temp_trend") or []
-            values.append([(pt["ts"], pt["temp"]) for pt in trend])
+            values.append([_TREND_ROW(pt["ts"], pt["temp"]) for pt in trend])
         else:
             values.append(emit.get(f.name))
-    return Row(*values)
+    return _OUT_ROW(*values)
 
 
 class FreezerIncidentProcessor(StatefulProcessor):
