@@ -265,9 +265,7 @@
     <div class="kpis">
       <div class="kpi accent"><span class="label">Input rate</span><span class="val mono"><span id="tEvps">0</span> <small>ev/s</small></span><span class="foot">consumed from Kafka</span></div>
       <div class="kpi"><span class="label">Output rate</span><span class="val mono"><span id="tAlps">0</span> <small>al/s</small></span><span class="foot">alerts emitted</span></div>
-      <div class="kpi"><span class="label">Latency p50</span><span class="val mono" id="tP50">0</span><span class="foot">end-to-end</span></div>
-      <div class="kpi"><span class="label">Latency p99</span><span class="val mono" id="tP99">0</span><span class="foot">end-to-end</span></div>
-      <div class="kpi"><span class="label">Consumer lag</span><span class="val mono" id="tLag">0</span><span class="foot">behind latest</span></div>
+      <div class="kpi"><span class="label">Consumer lag</span><span class="val mono" id="tLag">0</span><span class="foot">offset backpressure · behind latest</span></div>
     </div>
 
     <div class="card" style="margin-bottom:16px;">
@@ -278,7 +276,7 @@
 
     <div class="grid-2b" style="margin-bottom:16px;">
       <div class="card">
-        <h2>Latency percentiles</h2><p class="hint">recent window · business logic (event/Kafka → alert queued)</p>
+        <h2>Message latency</h2><p class="hint">business logic · message → alert queued (from Kafka timestamps)</p>
         <div class="l" style="margin:2px 0 4px;font-weight:600">In-Kafka → alert <span style="color:var(--muted);font-weight:400">· pipeline (broker clock)</span></div>
         <div class="pcts">
           <div class="pct"><div class="l">p50</div><div class="v mono" id="pcB50">–</div></div>
@@ -315,7 +313,7 @@
     </div>
 
     <div class="card">
-      <h2>Real-Time Mode metrics</h2><p class="hint">built-in StreamingQueryProgress latencies</p>
+      <h2>Real-Time Mode metrics</h2><p class="hint">Spark internals · built-in StreamingQueryProgress latencies</p>
       <div class="builtins">
         <div class="bi-row"><span class="nm"></span><span class="p50 bi-head">p50</span><span class="p99 bi-head">p99</span></div>
         <div class="bi-row"><span class="nm">processingLatencyMs <span style="color:var(--muted)">· read-to-write in query</span></span><span class="p50 mono" id="biProc50">–</span><span class="p99 mono" id="biProc99">–</span></div>
@@ -384,7 +382,7 @@
   function renderTech(){
     const t=snap.tech;
     $("tEvps").textContent=nf(t.evps); $("tAlps").textContent=nf(t.alps);
-    $("tP50").textContent=fmtMs(t.p50); $("tP99").textContent=fmtMs(t.p99); $("tLag").textContent=fmtMs(t.lag_ms);
+    $("tLag").textContent=fmtMs(t.lag_ms);
     const la=t.lat_a||{}, lb=t.lat_b||{};
     $("pcB50").textContent=fmtMs(lb.p50);$("pcB95").textContent=fmtMs(lb.p95);$("pcB99").textContent=fmtMs(lb.p99);
     $("pcA50").textContent=fmtMs(la.p50);$("pcA95").textContent=fmtMs(la.p95);$("pcA99").textContent=fmtMs(la.p99);
