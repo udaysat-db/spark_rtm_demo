@@ -109,30 +109,32 @@ class FleetAggregator:
             if u:
                 u["open"] = False
                 u["ts"] = now_ms
-        else:  # OPENED / ESCALATED / HEARTBEAT — the unit is (still) in alert
+        else:  # OPENED / ESCALATED / HEARTBEAT — the unit is (still) in alert. Store
+               # everything the feed and by-type views need, so those are rebuilt each
+               # snapshot from the CURRENT open set (below) rather than from a one-shot
+               # OPENED event. That keeps them correct across app restarts, when we only
+               # ever see an already-open unit's HEARTBEATs, not its original OPENED.
             st.units[fid] = {
                 "sev": sev, "status": SEV_STATUS.get(sev, 1), "open": True,
-                "site": rec.get("site_name") or "", "store": _store_num(rec), "ts": now_ms,
+                "site": rec.get("site_name") or "", "store": _store_num(rec),
+                "ts": now_ms, "typ": typ,
+                "lat_ms": round(float(lat)) if lat is not None else None,
+                "incident_id": rec.get("incident_id"),
             }
 
-        if lifecycle in _OPENING:
-            if lifecycle == "OPENED":
-                st.alerts += 1
-                st.by_type[typ] = st.by_type.get(typ, 0) + 1
-                st.by_sev[sev] = st.by_sev.get(sev, 0) + 1
-                st.site_hits[rec.get("site_name") or ""] += 1
-                st.alert_ts.append(now_ms)
-                st.fresh_total += 1
-                if rec.get("within_250ms"):
-                    st.fresh_hits += 1
-            if sev == "critical":
-                st.critical_ids.add(rec.get("incident_id") or f"{fid}:{now_ms}")
-            st.feed.appendleft({
-                "label": TYPE_LABEL.get(typ, typ), "severity": sev,
-                "site": rec.get("site_name") or "", "device": fid,
-                "lat_ms": round(float(lat)) if lat is not None else None,
-                "ts": now_ms / 1000.0, "lifecycle": lifecycle,
-            })
+        # Cumulative session KPIs (total alerts, freshness, sites) count genuine fresh
+        # opens only; the current-state views (units_in_alert/by_type/feed) come from
+        # st.units at snapshot time.
+        if lifecycle == "OPENED":
+            st.alerts += 1
+            st.by_sev[sev] = st.by_sev.get(sev, 0) + 1
+            st.site_hits[rec.get("site_name") or ""] += 1
+            st.alert_ts.append(now_ms)
+            st.fresh_total += 1
+            if rec.get("within_250ms"):
+                st.fresh_hits += 1
+        if lifecycle in _OPENING and sev == "critical":
+            st.critical_ids.add(rec.get("incident_id") or f"{fid}:{now_ms}")
 
     def ingest_metric(self, rec: dict) -> None:
         mode = _app_mode(rec.get("source_mode", "rtm"))
@@ -182,7 +184,19 @@ class FleetAggregator:
                 buckets[0 if v <= 250 else 1 if v <= 1000 else 2 if v <= 5000 else 3] += 1
             fresh_pct_rtm = None
 
-        units_in_alert = sum(1 for u in st.units.values() if u["open"])
+        # Current open incidents drive units_in_alert, by_type and the feed, so they
+        # reflect reality regardless of when this app process started.
+        open_units = [(fid, u) for fid, u in st.units.items() if u["open"]]
+        units_in_alert = len(open_units)
+        open_by_type = {}
+        for _, u in open_units:
+            open_by_type[u["typ"]] = open_by_type.get(u["typ"], 0) + 1
+        feed = [{
+            "label": TYPE_LABEL.get(u["typ"], u["typ"]), "severity": u["sev"],
+            "site": u["site"], "device": fid, "lat_ms": u.get("lat_ms"),
+            "ts": u["ts"] / 1000.0, "lifecycle": "OPEN",
+            "ago_s": max(0, round(now_ms / 1000.0 - u["ts"] / 1000.0)),
+        } for fid, u in sorted(open_units, key=lambda kv: -kv[1]["ts"])[:FEED_LEN]]
         top = sorted(st.site_hits.items(), key=lambda kv: -kv[1])[:4]
         el = int(time.time() - self.t0)
         return {
@@ -201,10 +215,9 @@ class FleetAggregator:
                              else ((st.fresh_hits / st.fresh_total * 100) if st.fresh_total else 0.0),
                 "cells": self._cells(st),
                 "top_sites": [list(t) for t in top],
-                "by_type": [{"key": k, "label": lbl, "n": st.by_type.get(k, 0)} for k, lbl in TYPES],
+                "by_type": [{"key": k, "label": lbl, "n": open_by_type.get(k, 0)} for k, lbl in TYPES],
                 "by_severity": dict(st.by_sev),
-                "feed": [{**f, "ago_s": max(0, round(now_ms / 1000.0 - f["ts"]))}
-                         for f in list(st.feed)[:30]],
+                "feed": feed[:30],
             },
             "tech": {
                 "evps": st.evps, "alps": self._alps(st, now_ms),
