@@ -95,6 +95,7 @@ class FleetAggregator:
         lifecycle = rec.get("lifecycle_event") or "OPENED"
         st.seen_freezers.add(fid)
         st.vol_out += 1
+        st.alert_ts.append(now_ms)   # every alert record → "Alerts out" throughput (al/s)
         st.scenario_name = rec.get("scenario_name") or st.scenario_name
 
         # Latency = alert's Kafka ts (ending) − a carried start (no current_timestamp).
@@ -139,7 +140,6 @@ class FleetAggregator:
             st.alerts += 1
             st.by_sev[sev] = st.by_sev.get(sev, 0) + 1
             st.site_hits[rec.get("site_name") or ""] += 1
-            st.alert_ts.append(now_ms)
         if lifecycle in _OPENING and sev == "critical":
             st.critical_ids.add(rec.get("incident_id") or f"{fid}:{now_ms}")
 
