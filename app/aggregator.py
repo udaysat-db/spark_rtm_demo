@@ -150,7 +150,8 @@ class FleetAggregator:
             st.builtins = {
                 "proc50": rec.get("proc_latency_p50_ms"), "proc99": rec.get("proc_latency_p99_ms"),
                 "q50": rec.get("queue_latency_p50_ms"), "q99": rec.get("queue_latency_p99_ms"),
-                "e50": rec.get("e2e_latency_p50_ms"), "e99": rec.get("e2e_latency_p99_ms"),
+                "e50": rec.get("e2e_latency_p50_ms"), "e95": rec.get("e2e_latency_p95_ms"),
+                "e99": rec.get("e2e_latency_p99_ms"),
             }
 
     # ---- snapshot -------------------------------------------------------
@@ -162,10 +163,24 @@ class FleetAggregator:
         self._advance_series(st, now_ms)
 
         lats = [v for _, v in st.lat_win]
-        p50, p95, p99 = _pct(lats, 50), _pct(lats, 95), _pct(lats, 99)
-        buckets = [0, 0, 0, 0]
-        for v in lats:
-            buckets[0 if v <= 250 else 1 if v <= 1000 else 2 if v <= 5000 else 3] += 1
+        rtm_lat = _rtm_lat(st.builtins) if mode == "rtm" else None
+        if rtm_lat:
+            # RTM: use the engine's own per-row latency percentiles (the alert-stamp
+            # latency is invalid in RTM — batch-fixed clock). Estimate buckets and the
+            # %-within-250ms from the percentile CDF.
+            p50, p95, p99 = rtm_lat
+            pmax = p99
+            cdf = sorted([(50.0, p50), (95.0, p95), (99.0, p99)])
+            c250, c1s, c5s = _frac_within(250, cdf), _frac_within(1000, cdf), _frac_within(5000, cdf)
+            buckets = [round(c250), round(c1s - c250), round(c5s - c1s), round(100 - c5s)]
+            fresh_pct_rtm = c250
+        else:
+            p50, p95, p99 = _pct(lats, 50), _pct(lats, 95), _pct(lats, 99)
+            pmax = max(lats) if lats else 0
+            buckets = [0, 0, 0, 0]
+            for v in lats:
+                buckets[0 if v <= 250 else 1 if v <= 1000 else 2 if v <= 5000 else 3] += 1
+            fresh_pct_rtm = None
 
         units_in_alert = sum(1 for u in st.units.values() if u["open"])
         top = sorted(st.site_hits.items(), key=lambda kv: -kv[1])[:4]
@@ -182,7 +197,8 @@ class FleetAggregator:
                 "units_in_alert": units_in_alert,
                 "alerts": st.alerts,
                 "critical": len(st.critical_ids),
-                "fresh_pct": (st.fresh_hits / st.fresh_total * 100) if st.fresh_total else 0.0,
+                "fresh_pct": fresh_pct_rtm if fresh_pct_rtm is not None
+                             else ((st.fresh_hits / st.fresh_total * 100) if st.fresh_total else 0.0),
                 "cells": self._cells(st),
                 "top_sites": [list(t) for t in top],
                 "by_type": [{"key": k, "label": lbl, "n": st.by_type.get(k, 0)} for k, lbl in TYPES],
@@ -192,7 +208,7 @@ class FleetAggregator:
             },
             "tech": {
                 "evps": st.evps, "alps": self._alps(st, now_ms),
-                "p50": p50, "p95": p95, "p99": p99, "max": max(lats) if lats else 0,
+                "p50": p50, "p95": p95, "p99": p99, "max": pmax,
                 "lag_ms": st.lag_ms,
                 "vol_in": st.vol_in, "vol_out": st.vol_out,
                 "lat_series": list(st.lat_series), "ev_series": list(st.ev_series),
@@ -223,8 +239,12 @@ class FleetAggregator:
         if sec == st._last_series_s:
             return
         st._last_series_s = sec
-        lats = [v for _, v in st.lat_win]
-        st.lat_series.append(_pct(lats, 50) if lats else 0.0)
+        rtm_lat = _rtm_lat(st.builtins)
+        if rtm_lat:                       # RTM: plot the engine's real e2e p50
+            st.lat_series.append(rtm_lat[0])
+        else:
+            lats = [v for _, v in st.lat_win]
+            st.lat_series.append(_pct(lats, 50) if lats else 0.0)
         st.ev_series.append(st.evps)
         st.al_series.append(self._alps(st, now_ms))
 
@@ -244,3 +264,30 @@ def _pct(sorted_or_not, p):
         return 0.0
     a = sorted(sorted_or_not)
     return a[min(len(a) - 1, int(p / 100 * len(a)))]
+
+
+def _rtm_lat(builtins):
+    """RTM end-to-end latency percentiles (p50, p95, p99) from the StreamingQuery
+    listener's builtins, or None if unavailable. This is RTM's OWN per-row latency
+    measurement — the correct source for RTM mode (the alert-stamp latency uses the
+    consumer's current_timestamp(), which in RTM is fixed at the long batch's start,
+    so rows produced later in the batch get a nonsensical negative stamp)."""
+    if not builtins or builtins.get("e50") is None:
+        return None
+    e50 = float(builtins["e50"])
+    e99 = float(builtins["e99"]) if builtins.get("e99") is not None else e50
+    e95 = float(builtins["e95"]) if builtins.get("e95") is not None else e50 + (e99 - e50) * 45.0 / 49.0
+    return e50, e95, e99
+
+
+def _frac_within(threshold, pts):
+    """Estimate the fraction (0-100) of samples <= threshold from ascending
+    (percentile, value) points, via piecewise-linear interpolation of the CDF."""
+    prev_p, prev_v = 0.0, 0.0
+    for pct, val in pts:
+        if threshold <= val:
+            if val <= prev_v:
+                return prev_p
+            return round(prev_p + (pct - prev_p) * (threshold - prev_v) / (val - prev_v), 1)
+        prev_p, prev_v = float(pct), float(val)
+    return 100.0

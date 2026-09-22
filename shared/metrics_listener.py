@@ -146,6 +146,7 @@ class MetricsListener(StreamingQueryListener):
                 "queue_latency_p50_ms": _pctile(lat.get("sourceQueuingLatencyMs"), "p50"),
                 "queue_latency_p99_ms": _pctile(lat.get("sourceQueuingLatencyMs"), "p99"),
                 "e2e_latency_p50_ms": _pctile(lat.get("e2eLatencyMs"), "p50"),
+                "e2e_latency_p95_ms": _pctile(lat.get("e2eLatencyMs"), "p95"),
                 "e2e_latency_p99_ms": _pctile(lat.get("e2eLatencyMs"), "p99"),
             })
         return rec
