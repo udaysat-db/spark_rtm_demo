@@ -94,7 +94,7 @@ def test_latency_percentiles_and_buckets():
     tech = agg.snapshot("rtm", now_ms=T)["tech"]
     assert tech["max"] == 8000
     assert tech["buckets"] == [1, 1, 1, 1]     # <=250, <=1000, <=5000, >5000
-    assert tech["lat_b"]["p50"] == 2000        # headline p50 = B
+    assert tech["segments"]["pipeline"]["p50"] == 2000   # pipeline (B) p50
 
 
 def test_cells_use_roster_and_worst_severity():
@@ -104,12 +104,24 @@ def test_cells_use_roster_and_worst_severity():
     assert cells == {"0142": 3, "0331": 0}   # critical store hot, the other OK
 
 
-def test_metric_feeds_tech_evps_lag_builtins():
+def test_metric_feeds_tech_lag_builtins():
+    # The consumer's per-batch metric feeds lag + RTM-internal builtins (NOT evps — that's
+    # now the app-tailed live input rate, see test_input_arrivals_feed_live_evps).
     agg = FleetAggregator()
     agg.ingest_metric(metric())
     tech = agg.snapshot("rtm", now_ms=T)["tech"]
-    assert tech["evps"] == 200 and tech["lag_ms"] == 3.0
+    assert tech["lag_ms"] == 3.0
     assert tech["builtins"]["e50"] == 60.0 and tech["builtins"]["proc99"] == 120.0
+
+
+def test_input_arrivals_feed_live_evps():
+    # events/sec is computed app-side from input-topic arrivals over EVPS_WINDOW_MS (5s),
+    # independent of the consumer's per-batch metric — so it stays live at any trigger.
+    agg = FleetAggregator()
+    for i in range(1000):                       # 1000 events across the 5s window → 200/s
+        agg.ingest_input(T - i * 5)             # spread over the last ~5s
+    snap = agg.snapshot("rtm", now_ms=T)
+    assert snap["evps"] == 200 and snap["tech"]["evps"] == 200
 
 
 def test_microbatch_metric_has_no_builtins():
@@ -133,10 +145,10 @@ def test_snapshot_shape_matches_contract():
     agg.ingest_alert(alert(), now_ms=T)
     agg.ingest_metric(metric())
     s = agg.snapshot("rtm", now_ms=T)
-    assert set(s) == {"mode", "engine", "scenario_name", "burst", "evps", "clock",
+    assert set(s) == {"mode", "engine", "scenario_name", "burst", "evps",
                       "business", "tech"}
     assert set(s["business"]) == {"units_monitored", "units_in_alert", "alerts", "critical",
                                   "fresh_pct", "cells", "top_sites", "by_type", "by_severity", "feed"}
-    assert set(s["tech"]) == {"evps", "alps", "p50", "p95", "p99", "max", "lat_a", "lat_b",
+    assert set(s["tech"]) == {"evps", "alps", "p50", "p95", "p99", "max", "segments",
                               "lag_ms", "vol_in", "vol_out", "lat_series", "ev_series",
                               "al_series", "buckets", "builtins"}

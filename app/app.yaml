@@ -11,6 +11,8 @@ env:
     value: "freezer_alerts_enriched"
   - name: KAFKA_METRICS_TOPIC
     value: "freezer_pipeline_metrics"
+  - name: KAFKA_INPUT_TOPIC
+    value: "freezer_sensor_events"    # tailed for a live events/sec, independent of the consumer's per-batch metric
   - name: KAFKA_SOURCE_MODE
     value: "rtm"                       # rtm | mb — engine shown first
   - name: FLEET_UNITS

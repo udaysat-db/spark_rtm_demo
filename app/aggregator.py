@@ -27,9 +27,18 @@ TYPES = [
 TYPE_LABEL = {k: lbl for k, lbl in TYPES}
 SEV_STATUS = {"warning": 1, "serious": 2, "critical": 3}
 
-LAT_WINDOW_MS = 120_000     # latency percentiles / buckets look back this far
+LAT_WINDOW_MS = 300_000     # latency percentiles: rolling look-back window (5 min; try 900_000 for 15)
+# Sanity ceiling for a detection latency. A live RTM/micro-batch pipeline detects in
+# sub-second to a few seconds; anything beyond this is not real pipeline latency but a
+# backlog/clock artifact (e.g. reprocessing old events, or producer↔consumer clock skew),
+# so we drop it from the percentiles rather than let it skew them.
+_LAT_SANITY_MS = 60_000
 ACTIVE_MS = 60_000          # a freezer counts as "in alert" if seen this recently
 SERIES_LEN = 60             # points kept in the time-series sparklines
+EVPS_WINDOW_MS = 5_000      # live events/sec computed over this rolling window of input arrivals
+CHART_WINDOW_MS = 15_000    # latency-over-time: each chart point = p95 over this SHORT window
+                            # (separate from the 5-min headline) so the line moves + shows the
+                            # RTM-vs-microbatch tail contrast instead of a flat 5-min average
 FEED_LEN = 60
 _OPENING = ("OPENED", "ESCALATED")   # lifecycle events that count as a fresh alert
 
@@ -71,6 +80,10 @@ class _ModeState:
         self.ev_series = deque(maxlen=SERIES_LEN)
         self.al_series = deque(maxlen=SERIES_LEN)
         self._last_series_s = 0
+        # Rolling window of recent detection-latency samples: (ts, lat_a, lat_b). The
+        # percentiles come from "the last LAT_WINDOW_MS" of samples, not the whole open
+        # set, so they reflect CURRENT pipeline latency and old samples age out.
+        self.lat_win = deque()
 
 
 def _app_mode(source_mode: str) -> str:
@@ -83,6 +96,19 @@ class FleetAggregator:
         self.roster = list(roster) if roster else None
         self.modes = defaultdict(_ModeState)
         self.t0 = time.time()
+        # Live input events/sec: arrival timestamps of raw sensor events (tailed from the
+        # input topic), GLOBAL (not per-mode — it's the producer's rate, feeding both
+        # consumers). Computed app-side so it's continuous, not the consumer's per-batch metric.
+        self.input_ts = deque()
+
+    def ingest_input(self, now_ms=None) -> None:
+        self.input_ts.append(now_ms or _now_ms())
+
+    def _input_evps(self, now_ms) -> int:
+        cut = now_ms - EVPS_WINDOW_MS
+        while self.input_ts and self.input_ts[0] < cut:
+            self.input_ts.popleft()
+        return round(len(self.input_ts) / (EVPS_WINDOW_MS / 1000.0))
 
     # ---- ingest ---------------------------------------------------------
     def ingest_alert(self, rec: dict, now_ms=None, alert_kafka_ts=None) -> None:
@@ -103,14 +129,24 @@ class FleetAggregator:
         #   B = alert_kafka_ts − input_kafka_ts  (in-Kafka → alert; broker-clock, clean)
         # DETECTION metric: measure only on fresh OPENED/ESCALATED events. HEARTBEAT
         # keep-alives re-emit a stale reading every ~20s and would inflate latency.
-        # Negatives (missing/odd clocks) are dropped rather than shown.
-        lat_a = lat_b = None
+        # Accept a value only if it's in [0, _LAT_SANITY_MS]: negatives (clock skew) and
+        # absurdly large values (backlog reprocessing) are dropped, not shown. Each valid
+        # sample also lands in the rolling window (st.lat_win) that drives the percentiles.
+        # Three segment latencies per sample, all in [0, _LAT_SANITY_MS]:
+        #   A  = alert_kafka_ts − event_ts        end-to-end   (event → alert)
+        #   B  = alert_kafka_ts − input_kafka_ts  pipeline     (Kafka → alert; broker clock)
+        #   IG = input_kafka_ts − event_ts        ingest       (event → Kafka)  [= A − B]
+        lat_a = lat_b = lat_ig = None
         if alert_kafka_ts and lifecycle in _OPENING:
             ev, ik = rec.get("event_ts"), rec.get("input_kafka_ts")
-            if ev is not None and alert_kafka_ts - ev >= 0:
+            if ev is not None and 0 <= alert_kafka_ts - ev <= _LAT_SANITY_MS:
                 lat_a = float(alert_kafka_ts - ev)
-            if ik is not None and alert_kafka_ts - ik >= 0:
+            if ik is not None and 0 <= alert_kafka_ts - ik <= _LAT_SANITY_MS:
                 lat_b = float(alert_kafka_ts - ik)
+            if ev is not None and ik is not None and 0 <= ik - ev <= _LAT_SANITY_MS:
+                lat_ig = float(ik - ev)
+            if lat_a is not None or lat_b is not None or lat_ig is not None:
+                st.lat_win.append((now_ms, lat_a, lat_b, lat_ig))
 
         if lifecycle == "RESOLVED":
             u = st.units.get(fid)
@@ -169,31 +205,38 @@ class FleetAggregator:
         mode = "mb" if mode in ("mb", "microbatch") else "rtm"
         st = self.modes[mode]
         self._evict(st, now_ms)
+        evps = self._input_evps(now_ms)   # live, app-computed input rate (trigger-independent)
 
-        # Current open incidents drive everything — units_in_alert, by_type, feed, AND the
-        # latency percentiles — so they reflect the live fleet regardless of when this app
-        # process started (a fresh window would sit empty once the fleet is stably open).
+        # Current open incidents drive units_in_alert, by_type, by_severity and the feed —
+        # all CURRENT-STATE (recomputed from the open set each snapshot) so the two "Alerts
+        # by …" panels agree with the Fleet grid.
         open_units = [(fid, u) for fid, u in st.units.items() if u["open"]]
         units_in_alert = len(open_units)
         open_by_type = {}
+        open_by_sev = {"warning": 0, "serious": 0, "critical": 0}
         for _, u in open_units:
             open_by_type[u["typ"]] = open_by_type.get(u["typ"], 0) + 1
+            open_by_sev[u["sev"]] = open_by_sev.get(u["sev"], 0) + 1
 
-        # Business latency = detection latency of currently-open incidents. Two views:
+        # Business latency = detection latency measured over the LAST LAT_WINDOW_MS (rolling
+        # window of recent OPENED/ESCALATED samples), so the percentiles track CURRENT
+        # pipeline latency and old samples age out — not the whole open set. Two views:
         #   B (in-Kafka → alert): clean single-clock pipeline latency — the headline.
         #   A (event → alert): fuller, cross-clock — shown alongside.
         # Spark internals stay in their own "Real-Time Mode metrics" panel (builtins).
-        lats_a = [u["lat_a"] for _, u in open_units if u.get("lat_a") is not None]
-        lats_b = [u["lat_b"] for _, u in open_units if u.get("lat_b") is not None]
+        lats_a = [x[1] for x in st.lat_win if x[1] is not None]   # A  end-to-end
+        lats_b = [x[2] for x in st.lat_win if x[2] is not None]   # B  pipeline
+        lats_ig = [x[3] for x in st.lat_win if x[3] is not None]  # IG ingest
         pa = (_pct(lats_a, 50), _pct(lats_a, 95), _pct(lats_a, 99))
         pb = (_pct(lats_b, 50), _pct(lats_b, 95), _pct(lats_b, 99))
+        pig = (_pct(lats_ig, 50), _pct(lats_ig, 95), _pct(lats_ig, 99))
         p50, p95, p99 = pb
         pmax = max(lats_b) if lats_b else 0
         buckets = [0, 0, 0, 0]
         for v in lats_b:
             buckets[0 if v <= 250 else 1 if v <= 1000 else 2 if v <= 5000 else 3] += 1
         fresh_pct = (sum(1 for v in lats_b if v <= 250) / len(lats_b) * 100) if lats_b else 0.0
-        self._advance_series(st, now_ms, pb[0])
+        self._advance_series(st, now_ms, evps)
 
         feed = [{
             "label": TYPE_LABEL.get(u["typ"], u["typ"]), "severity": u["sev"],
@@ -203,14 +246,12 @@ class FleetAggregator:
             "ago_s": max(0, round(now_ms / 1000.0 - u["ts"] / 1000.0)),
         } for fid, u in sorted(open_units, key=lambda kv: -kv[1]["ts"])[:FEED_LEN]]
         top = sorted(st.site_hits.items(), key=lambda kv: -kv[1])[:4]
-        el = int(time.time() - self.t0)
         return {
             "mode": mode,
             "engine": "Databricks · RTM" if mode == "rtm" else "Databricks · Micro-batch",
             "scenario_name": st.scenario_name,
             "burst": False,   # real data reflects the live producer; no simulated burst
-            "evps": st.evps,
-            "clock": f"{el // 60:02d}:{el % 60:02d}",
+            "evps": evps,
             "business": {
                 "units_monitored": len(st.seen_freezers),
                 "units_in_alert": units_in_alert,
@@ -220,15 +261,19 @@ class FleetAggregator:
                 "cells": self._cells(st),
                 "top_sites": [list(t) for t in top],
                 "by_type": [{"key": k, "label": lbl, "n": open_by_type.get(k, 0)} for k, lbl in TYPES],
-                "by_severity": dict(st.by_sev),
+                "by_severity": open_by_sev,   # CURRENT open incidents (matches Fleet grid + by_type)
                 "feed": feed[:30],
             },
             "tech": {
-                "evps": st.evps, "alps": self._alps(st, now_ms),
+                "evps": evps, "alps": self._alps(st, now_ms),
                 "p50": p50, "p95": p95, "p99": p99, "max": pmax,
-                # Two business-latency views (see snapshot): A = event→alert, B = in-Kafka→alert.
-                "lat_a": {"p50": pa[0], "p95": pa[1], "p99": pa[2]},
-                "lat_b": {"p50": pb[0], "p95": pb[1], "p99": pb[2]},
+                # Latency path decomposed into segments (each p50 + tail), for the
+                # Event → Kafka → Alert strip. ingest = A−B, pipeline = B, e2e = A.
+                "segments": {
+                    "ingest":   {"p50": pig[0], "p95": pig[1], "p99": pig[2]},
+                    "pipeline": {"p50": pb[0],  "p95": pb[1],  "p99": pb[2]},
+                    "e2e":      {"p50": pa[0],  "p95": pa[1],  "p99": pa[2]},
+                },
                 "lag_ms": st.lag_ms,
                 "vol_in": st.vol_in, "vol_out": st.vol_out,
                 "lat_series": list(st.lat_series), "ev_series": list(st.ev_series),
@@ -242,6 +287,10 @@ class FleetAggregator:
         acut = now_ms - ACTIVE_MS
         while st.alert_ts and st.alert_ts[0] < acut:
             st.alert_ts.popleft()
+        # Latency samples age out of the rolling percentile window after LAT_WINDOW_MS.
+        lcut = now_ms - LAT_WINDOW_MS
+        while st.lat_win and st.lat_win[0][0] < lcut:
+            st.lat_win.popleft()
         # A unit that hasn't been seen within ACTIVE_MS drops out of the alert view.
         for fid, u in list(st.units.items()):
             if u["ts"] < acut:
@@ -251,13 +300,20 @@ class FleetAggregator:
         recent = [t for t in st.alert_ts if t >= now_ms - 5000]
         return round(len(recent) / 5.0, 1)
 
-    def _advance_series(self, st, now_ms, latb_p50):
+    def _advance_series(self, st, now_ms, evps):
         sec = now_ms // 1000
         if sec == st._last_series_s:
             return
         st._last_series_s = sec
-        st.lat_series.append(latb_p50)           # B (in-Kafka → alert) p50 over time
-        st.ev_series.append(st.evps)
+        # Chart point = pipeline (B) p95 over a SHORT window (CHART_WINDOW_MS), so the line
+        # is lively and shows the tail contrast (flat for RTM, sawtooth for micro-batch).
+        # NO carry-forward: the window itself smooths brief gaps between alerts (any sample
+        # in the last CHART_WINDOW_MS counts), so an empty window means genuinely no recent
+        # detections → 0, not a stale value held forever (e.g. sitting at 750ms in `normal`).
+        recent_b = [x[2] for x in st.lat_win if x[2] is not None and x[0] >= now_ms - CHART_WINDOW_MS]
+        p95 = _pct(recent_b, 95) if recent_b else 0.0
+        st.lat_series.append(p95)                # B (Kafka → alert) p95 over time
+        st.ev_series.append(evps)                # live input rate (app-tailed, continuous)
         st.al_series.append(self._alps(st, now_ms))
 
     def _cells(self, st):

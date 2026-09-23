@@ -42,8 +42,8 @@ def set_burst(on: bool = True):
 def set_scenario(scenario: str = "normal"):
     """Drive the live producer's scenario (normal|door_open|compressor_failure|
     power_outage|fleet_hot_zone) by writing its control file — no restart/redeploy."""
-    data.set_scenario(scenario)
-    return {"scenario": scenario, "mock": data.is_mock}
+    ok = bool(data.set_scenario(scenario))
+    return {"scenario": scenario, "ok": ok, "mock": data.is_mock}
 
 
 @app.post("/api/controls/mode")

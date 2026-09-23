@@ -230,3 +230,9 @@ config.local.yaml
 config.*.local.yaml
 # A workspace-auth file if one is ever dropped in the repo (normally lives at ~/.databrickscfg)
 .databrickscfg
+
+# Node artifacts from local browser-testing tools (puppeteer/Selenium) — not part of this
+# repo (the app is static HTML + a Python backend; no npm build).
+node_modules/
+package.json
+package-lock.json

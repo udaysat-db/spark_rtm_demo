@@ -70,16 +70,18 @@ class MockDataSource:
         t.start()
 
     # ---- controls -------------------------------------------------------
-    def set_burst(self, burst: bool) -> None:
+    def set_burst(self, burst: bool) -> bool:
         with self._lock:
             self.burst = burst
             if burst:
                 self.burst_start = time.time()
+        return True
 
-    def set_scenario(self, scenario: str) -> None:
+    def set_scenario(self, scenario: str) -> bool:
         # Mock has no distinct per-scenario simulation; treat any incident scenario as
         # a burst and "normal" as calm, so the same console control works in mock mode.
         self.set_burst(scenario != "normal")
+        return True
 
     def set_mode(self, mode: str) -> None:
         with self._lock:
@@ -184,7 +186,6 @@ class MockDataSource:
     # ---- snapshot -------------------------------------------------------
     def snapshot(self) -> dict:
         with self._lock:
-            el = int(time.time() - self.t0)
             p50, p95, p99 = self._pct(50), self._pct(95), self._pct(99)
             mx = max(self.lat_win) if self.lat_win else 0
             buckets = [0, 0, 0, 0]
@@ -198,7 +199,6 @@ class MockDataSource:
                 "scenario_name": "Fleet hot zone · burst" if self.burst else "Normal operation",
                 "burst": self.burst,
                 "evps": self.evps,
-                "clock": f"{el // 60:02d}:{el % 60:02d}",
                 "business": {
                     "units_monitored": 25000,
                     "units_in_alert": round(self.units_alert),
@@ -214,6 +214,12 @@ class MockDataSource:
                 "tech": {
                     "evps": self.evps, "alps": self.alps,
                     "p50": p50, "p95": p95, "p99": p99, "max": mx, "lag_ms": self.lag,
+                    # Path segments (mock: pipeline = lat_win; ingest/e2e synthesized around it).
+                    "segments": {
+                        "ingest":   {"p50": round(p50 * 0.45), "p95": round(p95 * 0.45), "p99": round(p99 * 0.45)},
+                        "pipeline": {"p50": round(p50), "p95": round(p95), "p99": round(p99)},
+                        "e2e":      {"p50": round(p50 * 1.45), "p95": round(p95 * 1.45), "p99": round(p99 * 1.45)},
+                    },
                     "vol_in": self.vol_in, "vol_out": self.vol_out,
                     "lat_series": list(self.lat_series), "ev_series": list(self.ev_series),
                     "al_series": list(self.al_series), "buckets": buckets,

@@ -88,6 +88,10 @@ class KafkaDataSource:
         self.mode = "mb" if os.getenv("KAFKA_SOURCE_MODE") == "mb" else "rtm"
         self.alerts_topic = os.getenv("KAFKA_ALERTS_TOPIC", "freezer_alerts_enriched")
         self.metrics_topic = os.getenv("KAFKA_METRICS_TOPIC", "freezer_pipeline_metrics")
+        # Tailed only to COUNT arrivals → a live events/sec, computed app-side from the real
+        # record flow rather than the consumer's per-batch input_rows_per_second (which
+        # refreshes only once per trigger, so it reads 0 between long RTM batches).
+        self.input_topic = os.getenv("KAFKA_INPUT_TOPIC", "freezer_sensor_events")
         # Roster ships with the app (app/fleet_roster.csv) so the grid renders every
         # store at rest; STORE_ROSTER_PATH overrides. Falls back to deriving stores
         # from alerts if neither is present.
@@ -136,13 +140,15 @@ class KafkaDataSource:
                   f"{type(e).__name__}: {e}", file=sys.stderr)
             return False
 
-    def set_burst(self, burst: bool) -> None:
-        # The burst button toggles the live producer between a dramatic incident
-        # scenario and calm — by writing the control file the producer tails.
-        self._write_control("compressor_failure" if burst else "normal")
+    def set_burst(self, burst: bool) -> bool:
+        # Legacy one-click toggle (compressor_failure ⇄ normal). The console now drives
+        # scenarios explicitly via set_scenario; kept for API compatibility.
+        return self._write_control("compressor_failure" if burst else "normal")
 
-    def set_scenario(self, scenario: str) -> None:
-        self._write_control(scenario)
+    def set_scenario(self, scenario: str) -> bool:
+        # Returns True only if the control file was actually written, so the console can
+        # show honest success/failure (and not silently snap the dropdown back).
+        return self._write_control(scenario)
 
     def set_mode(self, mode: str) -> None:
         # Both engines are in the shared topics (tagged), so this just switches which
@@ -153,13 +159,19 @@ class KafkaDataSource:
     # ---- consume loop ---------------------------------------------------
     def _run(self):
         from kafka import KafkaConsumer  # imported here so the module loads without kafka installed
-        consumer = KafkaConsumer(self.alerts_topic, self.metrics_topic, **_consumer_kwargs())
+        consumer = KafkaConsumer(self.alerts_topic, self.metrics_topic, self.input_topic,
+                                 **_consumer_kwargs())
         # `consumer_timeout_ms` makes the iterator raise StopIteration after an idle
         # gap — it ENDS the `for`, it does not loop. Wrap it so an idle second just
         # re-enters iteration instead of killing this daemon thread (the tail must
         # run for the life of the app, and the topics are quiet between messages).
         while True:
             for msg in consumer:
+                if msg.topic == self.input_topic:
+                    # Just count arrivals for the live events/sec — no need to parse.
+                    with self._lock:
+                        self.agg.ingest_input(msg.timestamp)
+                    continue
                 rec = msg.value
                 if not isinstance(rec, dict):
                     continue

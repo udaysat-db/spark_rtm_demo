@@ -1,0 +1,59 @@
+# RTM + ForeachWriter producer — a PROTOTYPE to A/B against the micro-batch producer
+# (resources/producer.job.yml). Same generator, but a `rate` source drives a Real-Time
+# Mode query whose ForeachWriter reads the live scenario in open() and shapes+produces
+# each event in process() — no foreachBatch, no broadcast-nested-loop control join
+# (both rejected by RTM). Do NOT run this at the same time as `producer`: both write the
+# input topic and would double-produce. See src/producer_rtm/main.py.
+resources:
+  jobs:
+    producer_rtm:
+      name: "[${bundle.target}] SignalNow — RTM ForeachWriter producer (prototype)"
+      tasks:
+        - task_key: produce_rtm
+          spark_python_task:
+            python_file: ../src/producer_rtm/main.py
+            parameters:
+              - "--kafka-bootstrap"
+              - "${var.kafka_bootstrap_servers}"
+              - "--secret-scope"
+              - "${var.kafka_secret_scope}"
+              - "--topic"
+              - "${var.input_topic}"
+              - "--static-path"
+              - "/Volumes/${var.catalog}/${resources.schemas.signalnow.name}/static"
+              - "--checkpoint"
+              - "/Volumes/${var.catalog}/${resources.schemas.signalnow.name}/checkpoints/producer_rtm"
+              - "--events-per-second"
+              - "${var.events_per_second}"
+              - "--scenario"
+              - "${var.scenario}"                  # fallback only; the control file wins
+              - "--control-path"
+              - "/Volumes/${var.catalog}/${resources.schemas.signalnow.name}/control"
+              - "--num-partitions"
+              - "${var.kafka_topic_partitions}"     # rate partitions = RTM slot demand (no shuffle here)
+              - "--rtm-trigger"
+              - "${var.rtm_trigger_interval}"       # RTM long-batch/checkpoint cadence (same as rtm_consumer). NOT the live-control cadence — that's re-read every ~5s inside process().
+          job_cluster_key: rtm
+          libraries:
+            - whl: ../dist/*.whl
+            - pypi:
+                # The ForeachWriter produces from executors. Needs kafka-python >= 2.1.0:
+                # 2.0.2 vendors `six`, whose meta-path importer lacks find_spec and trips
+                # Databricks' WSFS import finder on the cluster's Python 3.12
+                # (_SixMetaPathImporter has no attribute 'find_spec'). 2.1.0 dropped six.
+                package: "kafka-python>=2.1.0"
+
+      job_clusters:
+        - job_cluster_key: rtm
+          new_cluster:
+            spark_version: ${var.spark_version}
+            instance_pool_id: ${var.instance_pool_id}  # warm pool (standalone; node type + on-demand come from the pool)
+            num_workers: ${var.rtm_workers}         # fixed size (no autoscale) — required by RTM
+            data_security_mode: SINGLE_USER          # Dedicated access mode
+            spark_conf:
+              # RTM ON here (unlike the micro-batch producer): rate → foreach is an
+              # RTM-legal plan (no foreachBatch, no disallowed join). Slot math: rate
+              # numPartitions (kafka_topic_partitions) with no streaming shuffle.
+              spark.databricks.streaming.realTimeMode.enabled: "true"
+              spark.sql.shuffle.partitions: "${var.shuffle_partitions}"
+            # Photon OFF (no runtime_engine: PHOTON). Spot OFF via the pool (ON_DEMAND).

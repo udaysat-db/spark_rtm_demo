@@ -88,7 +88,7 @@ def build_events(df: DataFrame, scenario) -> DataFrame:
     dlimit = F.col("door_open_limit_seconds")
 
     warming = sc.isin("compressor_failure", "power_outage", "fleet_hot_zone")
-    door_scn = sc.isin("door_open", "fleet_hot_zone")
+    door_scn = sc.isin("door_open")   # fleet_hot_zone is pure warming (→ TEMP_HIGH), no doors
 
     # Temperature: affected warming units climb over the limit by an amount scaled by
     # intensity — mild ≈ just over (TEMP_HIGH warning), only the severe tail ≥ +2 °C

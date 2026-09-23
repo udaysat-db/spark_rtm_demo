@@ -23,7 +23,7 @@ TARGET="${1:-dev}"
 # Env avoids `--var`'s comma-splitting, which breaks values like a multi-broker
 # kafka_bootstrap_servers (host1:9096,host2:9096).
 setvar() { local v; v="$(cfg "$1")"; [ -n "$v" ] && export "BUNDLE_VAR_$1=$v"; return 0; }
-for k in profile catalog schema spark_version node_type_id rtm_workers shuffle_partitions \
+for k in profile catalog schema spark_version node_type_id instance_pool_id rtm_workers shuffle_partitions \
          kafka_bootstrap_servers input_topic output_topic metrics_topic \
          kafka_topic_partitions kafka_secret_scope \
          events_per_second scenario processing_time_interval rtm_trigger_interval; do setvar "$k"; done
