@@ -47,7 +47,7 @@ resources:
         - job_cluster_key: rtm
           new_cluster:
             spark_version: ${var.spark_version}
-            instance_pool_id: ${var.instance_pool_id}  # warm pool (standalone; node type + on-demand come from the pool)
+            node_type_id: ${var.node_type_id}
             num_workers: ${var.rtm_workers}         # fixed size (no autoscale) — required by RTM
             data_security_mode: SINGLE_USER          # Dedicated access mode
             spark_conf:
@@ -56,4 +56,6 @@ resources:
               # numPartitions (kafka_topic_partitions) with no streaming shuffle.
               spark.databricks.streaming.realTimeMode.enabled: "true"
               spark.sql.shuffle.partitions: "${var.shuffle_partitions}"
-            # Photon OFF (no runtime_engine: PHOTON). Spot OFF via the pool (ON_DEMAND).
+            # Photon OFF (do not set runtime_engine: PHOTON) and spot OFF — required by RTM.
+            aws_attributes:
+              availability: ON_DEMAND   # Azure: use azure_attributes.availability: ON_DEMAND

@@ -31,13 +31,6 @@ variables:
   node_type_id:
     description: Cloud-specific worker type (e.g. i3.2xlarge / Standard_E8ds_v5).
     default: i3.2xlarge
-  instance_pool_id:
-    description: >-
-      Warm instance pool the streaming job clusters attach to (created out-of-band —
-      pools are long-lived infra, not per-deploy, and a bundle-managed pool collides with
-      dev-mode's `dev` tag). Set in config.yaml. Its node type must match node_type_id and
-      it must preload spark_version. On-demand only (RTM forbids spot).
-    default: ""
   rtm_workers:
     description: Fixed worker count. RTM slot math — worker vCPUs must be >= sum of partitions across stages.
     default: 2
