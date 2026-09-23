@@ -59,9 +59,24 @@ scripts/           test.sh, deploy.sh, run.sh, dev-app.sh
 
 ## Prerequisites
 
-- **Databricks CLI** and a workspace with Unity Catalog. RTM needs **DBR 18.1+**.
+> **Real-Time Mode is an Apache Spark feature, not a Databricks-only one.** RTM
+> (`trigger(realTime=…)`) is part of **open-source Apache Spark 4.1**, so the streaming logic
+> in `shared/` + `src/` runs on any Spark 4.1+ runtime (OSS Spark, EMR, Databricks). What's
+> Databricks-specific in *this repo* is only the **deployment** — the Asset Bundle, the
+> Databricks App console, and Unity Catalog volumes — not RTM itself.
+
+**To run this demo as shipped (on Databricks):**
+- **Databricks CLI** and a workspace with Unity Catalog. Databricks Runtime **16.4 LTS minimum,
+  18.1+ recommended** (RTM's GA baseline; 18.1+ for the latest optimizations). RTM runs on a
+  Classic, fixed-size cluster — autoscaling, spot, and Photon off.
 - A **Kafka** cluster reachable from the workspace (bring your own — this repo provisions no infra).
 - For local tests: **Python 3.10–3.12** and a **JDK 17**.
+
+**To run the streaming logic on open-source Spark instead:** you need Apache Spark **4.1+**
+(where `trigger(realTime=…)` is available); the enablement config differs from Databricks'
+`spark.databricks.streaming.realTimeMode.enabled` — see the Apache Spark Structured Streaming
+docs. You'd swap the Databricks deploy (bundle / app / UC volumes) for your own submit +
+orchestration; `shared/pipeline.py` and the consumers are the portable core.
 
 > This is a public demo repo and contains **no infrastructure-provisioning code** — no Terraform
 > for the broker/workspace/network, no discovery scripts, and no secrets. Kafka and the workspace
