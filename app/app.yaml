@@ -1,11 +1,13 @@
 command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
 
 env:
-  # Public-repo default is mock ("true"); this deployment runs live ("false").
+  # Default is mock ("true"): the app deploys fully demoable with no Kafka and no secrets.
+  # To go live set "false" and uncomment the valueFrom entries below — see
+  # docs/prerequisites.md, "The app".
   - name: USE_MOCK_BACKEND
-    value: "false"
+    value: "true"
 
-  # --- Live Kafka backend ---
+  # --- Live Kafka backend (ignored in mock mode) ---
   # Generic, non-sensitive names — safe as literals in this public repo:
   - name: KAFKA_ALERTS_TOPIC
     value: "freezer_alerts_enriched"
@@ -18,15 +20,16 @@ env:
   - name: FLEET_UNITS
     value: "500"                       # total freezers monitored (matches gen_fleet default; stores come from the roster)
   - name: KAFKA_SASL_MECHANISM
-    value: "SCRAM-SHA-512"             # PLAIN | SCRAM-SHA-512 (MSK SASL/SCRAM)
+    value: "SCRAM-SHA-512"             # PLAIN | SCRAM-SHA-512 — match your broker
   # From the secret scope via valueFrom (never inline) — keeps the broker endpoint AND the
-  # SASL credentials out of the committed repo. The feeder populates these scope keys (§3).
-  - name: KAFKA_BOOTSTRAP
-    valueFrom: "kafka-bootstrap"
-  - name: KAFKA_SASL_USERNAME
-    valueFrom: "kafka-sasl-username"
-  - name: KAFKA_SASL_PASSWORD
-    valueFrom: "kafka-sasl-password"
+  # SASL credentials out of the committed repo. Live mode only: uncomment these together with
+  # the matching secret bindings in resources/signalnow_console.app.yml.
+  # - name: KAFKA_BOOTSTRAP
+  #   valueFrom: "kafka-bootstrap"
+  # - name: KAFKA_SASL_USERNAME
+  #   valueFrom: "kafka-sasl-username"
+  # - name: KAFKA_SASL_PASSWORD
+  #   valueFrom: "kafka-sasl-password"
   # Live-control volume path (the console writes the producer's scenario here). From the
   # uc_securable resource binding, so it resolves to the deployed (dev-prefixed) volume.
   - name: KAFKA_CONTROL_PATH

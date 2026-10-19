@@ -47,11 +47,11 @@ incidents; `shared/rules.py` keeps the equivalent stateless rules as a readable 
 shared/            engine-agnostic core: schemas, rules, incident_engine, stateful, latency,
                    enrichment, kafka, metrics_listener, pipeline, scenarios
 src/               streaming entrypoints: producer, rtm_consumer, microbatch_consumer
-resources/         DAB resources: jobs, schema + volumes, Kafka secret scope, the app
+resources/         DAB resources: jobs, schema + volumes, the app
 data/static/       enrichment CSVs (the fleet + thresholds)
 app/               Databricks App (FastAPI) — SignalNow Console, Business + Tech tabs
 tests/             pytest suite (local Spark, no cluster/Kafka)
-docs/              business-case, data-model, alerting-logic, deploy-contract
+docs/              business-case, data-model, alerting-logic, prerequisites
 databricks.yml     the bundle
 config.template.yaml   copy to config.yaml (gitignored) and fill in
 scripts/           test.sh, deploy.sh, run.sh, dev-app.sh
@@ -108,8 +108,8 @@ pipeline runs. **Inject burst** and the **RTM / Micro-batch** toggle simulate th
 ```bash
 cp config.template.yaml config.yaml   # fill in profile, catalog, Kafka, DBR, node type
 
-# The Kafka cluster, topics, and the secret scope (created + populated) come from your
-# infra/feeder setup; the deploy runs as a workspace admin. See docs/deploy-contract.md.
+# Bring your own Kafka cluster + topics and a populated secret scope; deploy as a
+# workspace admin. See docs/prerequisites.md for exactly what each needs.
 
 ./scripts/deploy.sh                    # deploy the bundle + upload enrichment CSVs
 ./scripts/run.sh producer              # start each job (streaming, runs continuously)
@@ -120,20 +120,18 @@ cp config.template.yaml config.yaml   # fill in profile, catalog, Kafka, DBR, no
 Confirm the RTM query is truly in Real-Time Mode by checking the physical plan shows
 `RealTimeStreamScan` (not `MicroBatchScan`).
 
-The **console app deploys with the bundle** (mock data by default). To point it at live
-Kafka, set `USE_MOCK_BACKEND=false` and the `KAFKA_*` env in `app/app.yaml` (see
-[`docs/deploy-contract.md`](docs/deploy-contract.md) §5).
+The **console app deploys with the bundle** (mock data by default, no secrets needed). To point it at live Kafka, follow [The app](docs/prerequisites.md#5-the-app) in the prerequisites.
 
 ## The app and real data
 
-`app/` is a real Databricks App. It reads only through the `DataSource` interface
-(`app/backend.py`). To point it at live data, set `USE_MOCK_BACKEND=false` and implement a
-`KafkaDataSource` that tails the `freezer_alerts_enriched` topic (plus the metrics topic) and
-aggregates in memory — the API and UI don't change. Kafka is the only sink; there is no
-database in the path. See [`app/README.md`](app/README.md).
+`app/` is a real Databricks App. It reads only through the `DataSource` interface (`app/backend.py`), with two implementations: `MockDataSource` (the default) and `KafkaDataSource` (`app/backend_kafka.py`, `USE_MOCK_BACKEND=false`), which tails the `freezer_alerts_enriched` and `freezer_pipeline_metrics` topics and aggregates in memory. The API and UI are the same for both. Kafka is the only sink; there is no database in the path. See [`app/README.md`](app/README.md).
 
 ## Roadmap
 
 1. **Databricks classic jobs + RTM** — this repo.
 2. **Databricks SDP (Lakeflow Declarative Pipelines) on RTM** — same logic, declarative.
 3. **OSS Spark / EMR** — the same code on Spark 4.1+, for the portability story.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

@@ -17,7 +17,7 @@ The API and UI only call `DataSource` (`backend.py`):
   in `aggregator.py`). Kafka is the only sink — no database in the path. The `snapshot()`
   contract is identical, so the API and frontend don't change. Both engines share the
   topics (tagged by `source_mode`), so the **RTM / Micro-batch** toggle switches which
-  tag's view is shown. Config is via env (see `app.yaml` and `docs/deploy-contract.md`).
+  tag's view is shown. Config is via env (see `app.yaml` and [`docs/prerequisites.md`](../docs/prerequisites.md)).
 
 ## Run locally
 
@@ -35,7 +35,4 @@ Micro-batch** toggle previews the same UI under each latency profile.
 
 The app is a **bundle resource** (`resources/signalnow_console.app.yml`), so
 `databricks bundle deploy` (or `./scripts/deploy.sh`) creates it with the jobs — mock data
-by default, fully demoable. To go live, set `USE_MOCK_BACKEND=false` and the `KAFKA_*` env in
-`app.yaml` (bootstrap, topics, source mode, and SASL creds via `valueFrom` from the Kafka
-secret scope); grant the app SP `READ` on that scope. No database is attached — the app reads
-only Kafka.
+by default, fully demoable. To go live, set `USE_MOCK_BACKEND=false` in `app.yaml`, uncomment the `KAFKA_*` `valueFrom` entries there and the matching secret bindings in `resources/signalnow_console.app.yml`, and redeploy; see [The app](../docs/prerequisites.md#5-the-app). No database is attached — the app reads only Kafka.

@@ -20,7 +20,7 @@ variables:
     description: Databricks CLI profile to deploy with.
     default: DEFAULT
   catalog:
-    description: Unity Catalog for the schema and volumes (Kafka is the only sink; no Lakebase).
+    description: Unity Catalog for the schema and volumes (Kafka is the only sink).
     default: main
   schema:
     default: signalnow_rtm

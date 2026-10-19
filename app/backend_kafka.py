@@ -6,7 +6,7 @@ A background thread polls Kafka and updates the in-memory aggregator; `snapshot(
 reads the current view. Both engines write to the shared topics tagged by
 `source_mode`, so one instance can toggle RTM ↔ micro-batch with `set_mode`.
 
-Config via env (injected by app.yaml on Databricks Apps; see docs/deploy-contract.md):
+Config via env (injected by app.yaml on Databricks Apps; see docs/prerequisites.md):
   KAFKA_BOOTSTRAP          host:port[,host:port]
   KAFKA_ALERTS_TOPIC       default freezer_alerts_enriched
   KAFKA_METRICS_TOPIC      default freezer_pipeline_metrics

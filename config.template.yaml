@@ -2,11 +2,11 @@
 #
 # This repo contains NO infrastructure-provisioning code: Kafka and the Databricks
 # workspace are bring-your-own. Kafka credentials are NOT stored here — they go into
-# a Databricks secret scope out of band (see docs/deploy-contract.md).
+# a Databricks secret scope out of band (see docs/prerequisites.md).
 #
 # The keys here map 1:1 onto the bundle variables in databricks.yml. For the full
-# credential contract (auth, grants, secret-scope keys, network, topics), see
-# docs/deploy-contract.md.
+# list of prerequisites (auth, grants, secret-scope keys, network, topics), see
+# docs/prerequisites.md.
 
 # --- Databricks workspace (bring your own) ---
 profile: <your-databricks-cli-profile>     # from `databricks auth profiles`
@@ -14,7 +14,7 @@ catalog: <your-unity-catalog>              # deploy principal has CREATE SCHEMA/
 schema: signalnow_rtm                       # created by the bundle
 
 # --- Compute (RTM: Classic, fixed-size, Photon OFF, spot OFF) ---
-spark_version: 18.1.x-scala2.13            # DBR 18.1+ (Kafka-only path; no Lakebase)
+spark_version: 18.1.x-scala2.13            # DBR 18.1+
 node_type_id: <cloud-node-type>            # e.g. i3.2xlarge (AWS) / Standard_E8ds_v5 (Azure)
 rtm_workers: 2                              # fixed worker count; worker vCPUs >= sum of partitions across stages
 shuffle_partitions: 8                       # spark.sql.shuffle.partitions for the stateful shuffle — keep small for RTM slot math
@@ -26,7 +26,7 @@ output_topic: freezer_alerts_enriched
 metrics_topic: freezer_pipeline_metrics     # consumers' StreamingQueryListener write here; the live app reads it
 kafka_topic_partitions: 4                   # must equal the real topic partition count (drives RTM slot math)
 # Credentials/endpoint are read at runtime from the secret scope below (never committed).
-# The feeder populates it — see docs/deploy-contract.md §3:
+# Create and populate it before deploying — see docs/prerequisites.md, "Kafka secrets":
 kafka_secret_scope: signalnow_kafka
 #   databricks secrets create-scope signalnow_kafka
 #   databricks secrets put-secret  signalnow_kafka sasl_jaas_config   # pipeline (if SASL)
